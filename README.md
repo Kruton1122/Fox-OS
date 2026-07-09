@@ -36,7 +36,7 @@ Works on Raspberry Pi, VPS, mini PCs, home servers — anything headless you can
 ## Quick start
 
 ```bash
-git clone https://github.com/Kruton1122/foxos.git
+git clone https://github.com/Kruton1122/Fox-OS.git
 cd foxos
 python3 -m venv .venv && source .venv/bin/activate   # optional
 pip install -r requirements.txt
