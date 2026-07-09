@@ -11,13 +11,14 @@ import pwd
 import shutil
 import socket
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
-VERSION = "3.0.0"
+VERSION = "3.0.1"
 
 NETWORK_FS = frozenset({
     "cifs", "smb3", "smb2", "nfs", "nfs4", "fuse.sshfs", "fuse.rclone",
@@ -33,8 +34,13 @@ NOTES_PATH = DATA / "notes.json"
 
 app = Flask(__name__, static_folder=str(STATIC), static_url_path="/static")
 
-# CPU sample cache for % calc
-_cpu_prev: tuple[float, float] | None = None  # (idle, total)
+
+@app.after_request
+def _security_headers(resp):
+    """Fox OS is the frame parent (/embed/* embeds others); do not allow being framed."""
+    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    return resp
 
 
 def _default_config() -> dict:
@@ -56,6 +62,8 @@ def _default_config() -> dict:
         "links": [],
         "quick_access": [],
         "embed_map": {},
+        # Upload size cap for /api/files/upload (megabytes). 0 = unlimited (not recommended).
+        "max_upload_mb": 512,
     }
 
 
@@ -80,8 +88,22 @@ def load_config() -> dict:
 CFG = load_config()
 DATA.mkdir(parents=True, exist_ok=True)
 
+# Upload size cap (Flask/Werkzeug reject oversized bodies before handler runs)
+_max_mb = CFG.get("max_upload_mb", 512)
+try:
+    _max_mb_f = float(_max_mb)
+except (TypeError, ValueError):
+    _max_mb_f = 512.0
+if _max_mb_f and _max_mb_f > 0:
+    app.config["MAX_CONTENT_LENGTH"] = int(_max_mb_f * 1024 * 1024)
+
 # Discovered network mounts (id -> Path), merged into roots_map at request time
 _EPHEMERAL: dict[str, Path] = {}
+_EPHEMERAL_LOCK = threading.Lock()
+
+# CPU % sample state (threaded request workers)
+_cpu_prev: tuple[float, float] | None = None  # (idle, total)
+_cpu_lock = threading.Lock()
 
 
 def roots_map() -> dict[str, Path]:
@@ -89,18 +111,29 @@ def roots_map() -> dict[str, Path]:
     for r in CFG.get("roots", []):
         p = Path(r["path"]).resolve()
         out[r["id"]] = p
-    for rid, p in _EPHEMERAL.items():
-        if rid not in out:
-            out[rid] = p
+    with _EPHEMERAL_LOCK:
+        for rid, p in _EPHEMERAL.items():
+            if rid not in out:
+                out[rid] = p
     return out
 
 
 def write_allowed(root_id: str) -> bool:
     if not CFG.get("allow_write", False):
         return False
-    if root_id in _EPHEMERAL and root_id not in {r["id"] for r in CFG.get("roots", [])}:
+    with _EPHEMERAL_LOCK:
+        ephemeral = root_id in _EPHEMERAL and root_id not in {r["id"] for r in CFG.get("roots", [])}
+    if ephemeral:
         return False
     return root_id in set(CFG.get("write_roots") or [])
+
+
+def _prune_ephemeral() -> None:
+    """Drop discovered mounts whose paths no longer exist (removable/rotating shares)."""
+    with _EPHEMERAL_LOCK:
+        dead = [rid for rid, p in _EPHEMERAL.items() if not p.exists()]
+        for rid in dead:
+            del _EPHEMERAL[rid]
 
 
 def resolve_safe(root_id: str, rel: str = "") -> Path:
@@ -284,26 +317,39 @@ def _cpu_times() -> tuple[float, float] | None:
 
 
 def cpu_percent() -> float | None:
+    """Estimate CPU % from /proc/stat deltas (thread-safe under waitress/threaded WSGI)."""
     global _cpu_prev
     cur = _cpu_times()
     if not cur:
         return None
-    if _cpu_prev is None:
-        _cpu_prev = cur
-        time.sleep(0.08)
-        cur2 = _cpu_times()
-        if not cur2:
-            return None
-        prev, cur = _cpu_prev, cur2
-    else:
-        prev = _cpu_prev
-    _cpu_prev = cur
-    idle_d = cur[0] - prev[0]
-    total_d = cur[1] - prev[1]
-    if total_d <= 0:
-        return 0.0
-    used = 100.0 * (1.0 - idle_d / total_d)
-    return round(max(0.0, min(100.0, used)), 1)
+    with _cpu_lock:
+        if _cpu_prev is None:
+            _cpu_prev = cur
+            # Release lock during sleep so other threads aren't blocked
+            pass
+        else:
+            prev = _cpu_prev
+            _cpu_prev = cur
+            idle_d = cur[0] - prev[0]
+            total_d = cur[1] - prev[1]
+            if total_d <= 0:
+                return 0.0
+            used = 100.0 * (1.0 - idle_d / total_d)
+            return round(max(0.0, min(100.0, used)), 1)
+    # First call: short second sample outside lock
+    time.sleep(0.08)
+    cur2 = _cpu_times()
+    if not cur2:
+        return None
+    with _cpu_lock:
+        prev = _cpu_prev if _cpu_prev is not None else cur
+        _cpu_prev = cur2
+        idle_d = cur2[0] - prev[0]
+        total_d = cur2[1] - prev[1]
+        if total_d <= 0:
+            return 0.0
+        used = 100.0 * (1.0 - idle_d / total_d)
+        return round(max(0.0, min(100.0, used)), 1)
 
 
 def _fmt_uptime(secs: float) -> str:
@@ -551,13 +597,9 @@ def api_config():
 def api_places():
     """This PC / Network navigation for File Explorer."""
     configured = [_place_from_root(r) for r in CFG.get("roots", [])]
-    # merge discovered network mounts (read-only virtual ids only if path not already a root)
+    # merge discovered network mounts (read-only virtual ids)
     extra = discover_network_mounts()
-    # register discovered paths temporarily for resolve? only list if path is under an existing root
-    # For discovered mounts not in config, add as ephemeral roots for this process listing only —
-    # file APIs need roots_map. So only surface discovered if we inject into a side map.
-    # Safer: only show configured network roots + auto-add discovered into response AND
-    # allow resolve via ephemeral registry.
+    _prune_ephemeral()
     _register_ephemeral_roots(extra)
 
     local = [p for p in configured if p["kind"] != "network"]
@@ -595,12 +637,13 @@ def api_places():
 
 
 def _register_ephemeral_roots(places: list[dict]) -> None:
-    for p in places:
-        if p.get("discovered") and p.get("id") and p.get("path"):
-            try:
-                _EPHEMERAL[p["id"]] = Path(p["path"]).resolve()
-            except OSError:
-                _EPHEMERAL[p["id"]] = Path(p["path"])
+    with _EPHEMERAL_LOCK:
+        for p in places:
+            if p.get("discovered") and p.get("id") and p.get("path"):
+                try:
+                    _EPHEMERAL[p["id"]] = Path(p["path"]).resolve()
+                except OSError:
+                    _EPHEMERAL[p["id"]] = Path(p["path"])
 
 
 @app.get("/api/system")
@@ -1260,11 +1303,25 @@ def api_upload():
     return jsonify({"ok": True, "name": name})
 
 
+@app.errorhandler(413)
+def _too_large(_err):
+    mb = CFG.get("max_upload_mb", 512)
+    return jsonify({"error": f"file too large (max {mb} MB)"}), 413
+
+
 def main():
     host = CFG.get("host", "127.0.0.1")
     port = int(CFG.get("port", 8765))
-    print(f"Fox OS listening on http://{host}:{port}")
-    app.run(host=host, port=port, threaded=True)
+    threads = int(CFG.get("threads") or 8)
+    print(f"Fox OS v{VERSION} on http://{host}:{port} (waitress, threads={threads})")
+    try:
+        from waitress import serve
+    except ImportError:
+        # Dev fallback only — production installs should include waitress (requirements.txt)
+        print("WARNING: waitress not installed; falling back to Flask dev server (not for production)")
+        app.run(host=host, port=port, threaded=True)
+        return
+    serve(app, host=host, port=port, threads=threads, ident="FoxOS")
 
 
 if __name__ == "__main__":

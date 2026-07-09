@@ -8,6 +8,7 @@ Type=simple
 User=REPLACE_USER
 Group=REPLACE_USER
 WorkingDirectory=/opt/foxos
+# waitress WSGI (bundled via requirements.txt) — not Flask's dev server
 ExecStart=/usr/bin/python3 /opt/foxos/server.py
 Restart=on-failure
 RestartSec=3
