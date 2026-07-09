@@ -1,0 +1,19 @@
+[Unit]
+Description=Fox OS — web desktop for headless servers
+After=network.target
+
+[Service]
+Type=simple
+# Change User/Group/WorkingDirectory/ExecStart for your install path
+User=REPLACE_USER
+Group=REPLACE_USER
+WorkingDirectory=/opt/foxos
+ExecStart=/usr/bin/python3 /opt/foxos/server.py
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

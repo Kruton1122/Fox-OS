@@ -1,0 +1,25 @@
+# Local / secrets / machine-specific
+config.json
+foxos.service
+data/notes.json
+data/*.db
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.DS_Store
+
+# Personal wallpaper (ship a default separately)
+static/wallpaper.png
+static/wallpaper.jpg
+static/wallpaper.webp
+
+# Internal agent coordination notes (not project docs)
+HANDOFF.md
+
+# Editor / OS
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1a3a5c" />
+  <title>Fox OS</title>
+  <link rel="stylesheet" href="static/style.css?v=7" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='50' font-size='48'%3E🦊%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+  <div id="boot" class="boot">
+    <div class="boot-card">
+      <div class="boot-fox">🦊</div>
+      <div class="boot-title">Fox OS</div>
+      <div class="boot-sub">Starting desktop…</div>
+      <div class="boot-bar"><i></i></div>
+    </div>
+  </div>
+
+  <div id="desktop" class="desktop hidden" aria-label="Fox OS desktop">
+    <div class="wallpaper" aria-hidden="true">
+      <img class="wallpaper-img" id="wallpaperImg" alt="" decoding="async" draggable="false" />
+    </div>
+    <aside id="widgets" class="desk-widgets" aria-label="Desktop widgets"></aside>
+    <div id="icons" class="desktop-icons"></div>
+    <div id="windows" class="windows"></div>
+
+    <footer class="taskbar" role="navigation">
+      <button type="button" class="start-btn" id="startBtn" aria-haspopup="true" aria-expanded="false">
+        <span class="start-fox">🦊</span> Start
+      </button>
+      <div class="task-tabs" id="taskTabs"></div>
+      <div class="tray">
+        <span id="trayCpu" class="tray-stat" title="CPU">—</span>
+        <span id="trayMem" class="tray-stat" title="Memory">—</span>
+        <span id="trayHost" class="tray-host"></span>
+        <span id="clock" class="clock"></span>
+      </div>
+    </footer>
+
+    <div id="startMenu" class="start-menu hidden" role="menu">
+      <div class="start-side">Fox<span>OS</span></div>
+      <div class="start-items" id="startItems"></div>
+    </div>
+  </div>
+
+  <template id="tpl-window">
+    <div class="win" data-win="">
+      <div class="win-titlebar">
+        <span class="win-ico"></span>
+        <span class="win-title"></span>
+        <div class="win-controls">
+          <button type="button" class="win-min" title="Minimize">_</button>
+          <button type="button" class="win-max" title="Maximize">□</button>
+          <button type="button" class="win-close" title="Close">×</button>
+        </div>
+      </div>
+      <div class="win-body"></div>
+    </div>
+  </template>
+
+  <script src="static/app.js?v=7"></script>
+</body>
+</html>

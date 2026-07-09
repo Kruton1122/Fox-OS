@@ -1,0 +1,38 @@
+{
+  "port": 8765,
+  "host": "127.0.0.1",
+  "title": "Fox OS",
+  "wallpaper": "wallpaper.png",
+  "roots": [
+    {
+      "id": "home",
+      "label": "Home",
+      "path": "~",
+      "kind": "local",
+      "icon": "🏠"
+    }
+  ],
+  "default_root": "home",
+  "allow_write": true,
+  "write_roots": ["home"],
+  "services": ["ssh", "cron", "docker", "nginx"],
+  "services_auto": true,
+  "discover_desktop_apps": true,
+  "discover_docker": true,
+  "apps": [],
+  "links": [
+    {
+      "id": "example",
+      "label": "Example",
+      "url": "https://example.com/",
+      "icon": "🔗",
+      "group": "Bookmarks"
+    }
+  ],
+  "quick_access": [
+    { "id": "qa-home", "label": "Home", "root": "home", "path": "", "icon": "🏠" }
+  ],
+  "embed_map": {
+    "myapp.local": "myapp"
+  }
+}
