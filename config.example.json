@@ -60,5 +60,6 @@
   ],
   "embed_map": {
     "myapp.local": "myapp"
-  }
+  },
+  "terminal_ws_host": "0.0.0.0"
 }

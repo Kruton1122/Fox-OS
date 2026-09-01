@@ -2353,7 +2353,7 @@ def api_terminal_status():
         "ok": True,
         "allow_terminal": True,
         "ws_path": "/ws/terminal",
-        "listen": f"127.0.0.1:{port}",
+        "listen": f"{CFG.get("terminal_ws_host") or "0.0.0.0"}:{port}",
         "shell": os.environ.get("SHELL") or "/bin/bash",
         "user": pwd.getpwuid(os.getuid()).pw_name,
     })
@@ -2408,7 +2408,7 @@ def main():
             from terminal_ws import start_terminal_ws
             ws_port = int(CFG.get("terminal_ws_port") or 8766)
             ok = start_terminal_ws(
-                host="127.0.0.1",
+                host=str(CFG.get("terminal_ws_host") or "0.0.0.0"),
                 port=ws_port,
                 allow_check=lambda: bool(CFG.get("allow_terminal", False)),
             )
