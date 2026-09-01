@@ -1187,3 +1187,182 @@ html[data-icon-size="lg"] .desk-icon { width: 96px; }
 }
 .term-screen .xterm { height: 100%; }
 .term-screen .xterm-viewport { overflow-y: auto !important; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Mobile shell (v3.3.0) — Android/iOS-style launcher, hidden unless
+   body.mobile is set by app.js (narrow viewport / coarse pointer / forced).
+   ══════════════════════════════════════════════════════════════════════ */
+:root {
+  --m-status-h: 30px;
+  --m-dock-h: 58px;
+}
+
+.mobile-statusbar, .mobile-dock { display: none; }
+
+/* Status bar */
+body.mobile .mobile-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 300;
+  height: calc(var(--m-status-h) + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) 14px 0;
+  background: rgba(9, 18, 30, .94);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: #eaf2ff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 0 rgba(255,255,255,.08);
+}
+.m-clock { font-weight: 700; }
+.m-host { opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 32vw; }
+.m-stats { display: flex; gap: 10px; opacity: .9; }
+.m-stat { white-space: nowrap; }
+
+/* Bottom dock */
+body.mobile .mobile-dock {
+  display: flex;
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 300;
+  height: calc(var(--m-dock-h) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  background: rgba(16, 26, 42, .96);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid rgba(255,255,255,.1);
+  align-items: stretch;
+  justify-content: space-around;
+}
+.dock-btn {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; min-height: 44px; border: 0; background: transparent; color: #cfe0f5;
+  font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.dock-btn .dock-ico { font-size: 21px; line-height: 1; }
+.dock-btn .dock-lbl { font-size: 10px; opacity: .85; }
+.dock-btn.active, .dock-btn:active { color: #fff; }
+.dock-btn.active .dock-ico { transform: translateY(-1px); filter: drop-shadow(0 0 6px rgba(255,255,255,.5)); }
+
+/* Retire classic Win 3.1 chrome on mobile */
+body.mobile .taskbar { display: none !important; }
+body.mobile .desk-widgets { display: none !important; }
+body.mobile .snap-guide { display: none !important; }
+body.mobile, body.mobile .desktop { user-select: none; }
+
+/* Home screen: icon grid between status bar and dock */
+body.mobile .desktop-icons {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  grid-auto-rows: min-content;
+  gap: 20px 6px;
+  align-content: start;
+  max-height: none;
+  top: calc(var(--m-status-h) + env(safe-area-inset-top, 0px) + 16px);
+  bottom: calc(var(--m-dock-h) + env(safe-area-inset-bottom, 0px) + 16px);
+  left: calc(10px + env(safe-area-inset-left, 0px));
+  right: calc(10px + env(safe-area-inset-right, 0px));
+}
+body.mobile .desktop-icons.icon-freeform { display: grid !important; }
+body.mobile .desk-icon {
+  position: static !important;
+  width: auto; margin: 0; padding: 8px 2px;
+  min-height: 44px;
+}
+body.mobile .desk-icon .ico { font-size: 36px; }
+body.mobile .desk-icon .lbl { font-size: 11px; }
+
+/* Windows become full-screen sheets, docked between status bar and dock */
+body.mobile .windows { inset: 0; }
+body.mobile .win {
+  position: fixed !important;
+  left: env(safe-area-inset-left, 0px) !important;
+  right: env(safe-area-inset-right, 0px) !important;
+  top: calc(var(--m-status-h) + env(safe-area-inset-top, 0px)) !important;
+  bottom: calc(var(--m-dock-h) + env(safe-area-inset-bottom, 0px)) !important;
+  width: auto !important; height: auto !important;
+  min-width: 0; min-height: 0;
+  border: 0;
+  box-shadow: 0 -6px 24px rgba(0,0,0,.35);
+  border-radius: 16px 16px 0 0;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+body.mobile .win.minimized { display: none !important; }
+body.mobile .win-titlebar {
+  height: 48px;
+  padding: 0 4px 0 10px;
+  cursor: default;
+  border-radius: 16px 16px 0 0;
+}
+body.mobile .win-title { font-size: 14px; }
+body.mobile .win-min, body.mobile .win-max { display: none; }
+body.mobile .win-controls button.win-close {
+  width: 44px; height: 40px; font-size: 20px;
+}
+body.mobile .win-resize, body.mobile .win-resize-corner { display: none !important; }
+body.mobile .win-body { margin: 0; border: 0; }
+
+/* App drawer — Start menu reused as a full-screen sheet */
+body.mobile .start-menu {
+  position: fixed;
+  left: env(safe-area-inset-left, 0px);
+  right: env(safe-area-inset-right, 0px);
+  top: calc(var(--m-status-h) + env(safe-area-inset-top, 0px));
+  bottom: calc(var(--m-dock-h) + env(safe-area-inset-bottom, 0px));
+  width: auto; height: auto;
+  border: 0; box-shadow: 0 -6px 24px rgba(0,0,0,.35);
+  border-radius: 16px 16px 0 0;
+  overflow: hidden;
+}
+body.mobile .start-side { display: none; }
+body.mobile .start-main { max-height: none; }
+body.mobile .start-search-wrap { padding: 12px; }
+body.mobile .start-search { font-size: 16px; padding: 12px; min-height: 44px; }
+body.mobile .start-item { padding: 12px; min-height: 48px; }
+body.mobile .start-item .ico { font-size: 24px; }
+
+/* Touch targets: toolbars scroll horizontally instead of wrapping tiny buttons */
+body.mobile .app-toolbar,
+body.mobile .exp-cmd {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+body.mobile .app-toolbar::-webkit-scrollbar,
+body.mobile .exp-cmd::-webkit-scrollbar { display: none; }
+body.mobile .app-toolbar button,
+body.mobile .exp-cmd button,
+body.mobile .exp-upload {
+  min-height: 44px; min-width: 44px; padding: 8px 12px; font-size: 13px; flex-shrink: 0;
+}
+body.mobile .exp-navrow > button { width: 40px; height: 40px; flex-shrink: 0; }
+body.mobile .exp-search { min-height: 40px; }
+
+/* File Explorer: list-friendly, large rows, no side/details chrome */
+body.mobile .exp-sidebar { display: none; }
+body.mobile .exp-details { display: none; }
+body.mobile .exp-table td { padding: 13px 10px; font-size: 13px; }
+body.mobile .exp-table th { padding: 10px; }
+body.mobile .exp-icon-item { padding: 16px 6px; min-height: 44px; }
+body.mobile .exp-icon-item .ico { font-size: 38px; }
+body.mobile .exp-places-grid { grid-template-columns: 1fr; }
+body.mobile .exp-drive { padding: 14px; min-height: 44px; }
+
+/* Context menus (long-press) get bigger touch targets */
+body.mobile .ctx-menu { min-width: 210px; }
+body.mobile .ctx-item { padding: 12px 18px 12px 12px; min-height: 46px; font-size: 13px; }
+
+/* Settings / Calculator / Notes: fill the sheet, bigger controls */
+body.mobile .settings, body.mobile .settings-rich { max-width: none; }
+body.mobile .settings-check input[type="checkbox"] { width: 20px; height: 20px; }
+body.mobile .settings-section select { min-height: 40px; }
+body.mobile .calc-keys button { min-height: 48px; }
+body.mobile .prog-card, body.mobile .launch-tile { min-height: 44px; }

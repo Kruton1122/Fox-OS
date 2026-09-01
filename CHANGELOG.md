@@ -4,6 +4,26 @@ All notable changes to Fox OS are documented here.
 
 Format inspired by [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
+## [3.3.0] — 2026-09-01
+
+Mobile shell: Android/iOS-style launcher chrome for phones and tablets, alongside the unchanged desktop.
+
+### Added
+
+- **Mobile layout detection** — `body.mobile` (+ `<html data-layout>`) toggles automatically via `matchMedia('(max-width: 768px), (pointer: coarse)')`, live-updated on resize/orientation change. **Settings → Layout** adds an override select (Auto-detect / Force mobile / Force desktop) stored in `localStorage` — no server round-trip, no config.json changes.
+- **Home screen** — desktop icon grid restyles into a full-screen app grid (44px+ touch targets) between a top status bar and bottom dock; single tap opens apps in mobile mode (desktop keeps double-click / drag).
+- **Status bar** — fixed top bar with clock, hostname, compact CPU/RAM, safe-area aware (`env(safe-area-inset-*)`).
+- **Bottom dock** — iOS-style tab bar: Home, Files, System, Terminal, More (app drawer). Long-press / right-click Home for a **Recents** menu (jump to or close open windows).
+- **Full-screen app sheets** — windows become edge-to-edge sheets on mobile (rounded top, docked between status bar and bottom nav) instead of floating Win 3.1 windows; minimize/maximize controls hidden, resize handles disabled. **Swipe down on the title bar** (or the close button) dismisses a sheet.
+- **App drawer** — Start menu is reused and restyled as a full-screen search sheet on mobile (same data/search logic as desktop); opened from the dock's "More" button.
+- File Explorer, context menus, toolbars, Settings, and Calculator get mobile-specific sizing (44px+ rows/buttons, horizontally-scrolling toolbars, hidden sidebar/details pane, single-tap-to-open rows and "This PC" tiles) — purely cosmetic; same `/api/files*` calls as desktop.
+- `viewport` meta gains `maximum-scale=1`; added `mobile-web-app-capable` / `apple-mobile-web-app-*` meta tags (home-screen install polish, no new permissions).
+
+### Changed
+
+- Version bumped to **3.3.0**; static asset cache busters (`?v=330`).
+- No backend/API changes — mobile shell is a client-side rebuild of chrome only. Desktop layout, PTY terminal, trash, auth model, and `config.json` handling are untouched.
+
 ## [3.2.0] — 2026-09-01
 
 Desktop plus: Explorer power features, wallpaper & Settings, Browser + Terminal apps.
@@ -97,7 +117,8 @@ Initial public release: portable Flask + static web desktop for headless Linux.
 - `config.example.json` template; machine-local `config.json` gitignored.
 - systemd unit example and reverse-proxy notes.
 
-[3.2.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.1...HEAD
+[3.3.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.1...v3.2.0
 [3.1.1]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/Kruton1122/Fox-OS/compare/v3.0.0...v3.0.1

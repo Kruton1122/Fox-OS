@@ -1,4 +1,4 @@
-/* Fox OS frontend — window manager + apps v3.2 */
+/* Fox OS frontend — window manager + apps v3.3 (desktop + mobile shell) */
 (() => {
   'use strict';
 
@@ -18,6 +18,31 @@
   let sessionRestoring = false;
   let sessionSaveTimer = null;
   let taskPreviewEl = null;
+
+  /* ── Mobile layout detection ────────────────────────────────────────── */
+  const LAYOUT_KEY = 'foxos.layoutForce.v1'; // 'auto' | 'mobile' | 'desktop'
+  function getLayoutForce() {
+    try { return localStorage.getItem(LAYOUT_KEY) || 'auto'; } catch { return 'auto'; }
+  }
+  function setLayoutForce(v) {
+    try {
+      if (v === 'auto') localStorage.removeItem(LAYOUT_KEY);
+      else localStorage.setItem(LAYOUT_KEY, v);
+    } catch { /* */ }
+    applyLayoutMode();
+  }
+  const mobileMedia = window.matchMedia('(max-width: 768px), (pointer: coarse)');
+  function isMobile() {
+    const force = getLayoutForce();
+    if (force === 'mobile') return true;
+    if (force === 'desktop') return false;
+    return mobileMedia.matches;
+  }
+  function applyLayoutMode() {
+    const mobile = isMobile();
+    document.body.classList.toggle('mobile', mobile);
+    document.documentElement.dataset.layout = mobile ? 'mobile' : 'desktop';
+  }
 
   const CODE_EXTS = new Set([
     'py', 'js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'go', 'rs', 'c', 'cpp', 'cc', 'h', 'hpp',
@@ -45,10 +70,12 @@
   }
 
   function tickClock() {
-    const el = $('#clock');
-    if (!el) return;
     const d = new Date();
-    el.textContent = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const text = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const el = $('#clock');
+    if (el) el.textContent = text;
+    const m = $('#mClock');
+    if (m) m.textContent = text;
   }
 
   function bootDone() {
@@ -113,6 +140,81 @@
       if (clip) localStorage.setItem(FILE_CLIP_KEY, JSON.stringify(clip));
       else localStorage.removeItem(FILE_CLIP_KEY);
     } catch { /* */ }
+  }
+
+  function mobileGoHome() {
+    windows.forEach((w) => {
+      w.el.classList.add('minimized');
+      w.task?.classList.remove('active');
+    });
+    closeStart();
+    closeContextMenu();
+    setDockActive('home');
+  }
+
+  function setDockActive(name) {
+    $$('.dock-btn').forEach((b) => b.classList.toggle('active', b.dataset.dock === name));
+  }
+
+  function showRecents(anchorBtn) {
+    const open = [...windows.entries()].filter(([, rec]) => rec.el);
+    if (!open.length) {
+      showContextMenu(anchorBtn ? anchorBtn.getBoundingClientRect().left : 12, window.innerHeight - 160, [
+        { hint: 'No open apps' },
+      ]);
+      return;
+    }
+    const items = open.map(([id, rec]) => ({
+      label: `${$('.win-ico', rec.el)?.textContent || ''} ${$('.win-title', rec.el)?.textContent || id}`.trim(),
+      action: () => {
+        rec.el.classList.remove('minimized');
+        focusWin(id);
+        setDockActive('');
+      },
+    }));
+    items.push({ sep: true });
+    items.push({ label: 'Close all', danger: true, action: () => { [...windows.keys()].forEach((id) => closeWin(id)); mobileGoHome(); } });
+    const r = anchorBtn?.getBoundingClientRect();
+    showContextMenu(r ? r.left : 12, r ? r.top - 8 : window.innerHeight - 200, items);
+  }
+
+  function initMobileShell() {
+    applyLayoutMode();
+    const reapply = () => applyLayoutMode();
+    try { mobileMedia.addEventListener('change', reapply); } catch { mobileMedia.addListener?.(reapply); }
+    window.addEventListener('resize', reapply);
+    window.addEventListener('orientationchange', reapply);
+
+    const dock = $('#mobileDock');
+    if (!dock) return;
+    let longPressFired = false;
+    dock.querySelectorAll('.dock-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (longPressFired) { longPressFired = false; return; }
+        const which = btn.dataset.dock;
+        setDockActive(which === 'more' ? '' : which);
+        if (which === 'home') mobileGoHome();
+        else if (which === 'files') openFiles();
+        else if (which === 'system') openSystem();
+        else if (which === 'terminal') openTerminal();
+        else if (which === 'more') toggleStart();
+      });
+    });
+    let pressTimer = null;
+    const homeBtn = dock.querySelector('[data-dock="home"]');
+    if (homeBtn) {
+      homeBtn.addEventListener('pointerdown', () => {
+        pressTimer = setTimeout(() => { longPressFired = true; showRecents(homeBtn); }, 480);
+      });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => {
+        homeBtn.addEventListener(ev, () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
+      });
+      homeBtn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        longPressFired = true;
+        showRecents(homeBtn);
+      });
+    }
   }
 
   function applyDesktopAppearance() {
@@ -214,7 +316,7 @@
       btn.addEventListener('click', (e) => {
         $$('.desk-icon').forEach((b) => b.classList.remove('selected'));
         btn.classList.add('selected');
-        if (e.detail === 1 && window.matchMedia('(pointer: coarse)').matches) {
+        if (e.detail === 1 && isMobile()) {
           openApp(btn.dataset.app);
         }
       });
@@ -391,6 +493,12 @@
       };
       setMeter($('#trayCpu'), 'trayCpuBar', cpu != null ? `CPU ${cpu}%` : 'CPU —', cpu);
       setMeter($('#trayMem'), 'trayMemBar', mem != null ? `RAM ${mem}%` : 'RAM —', mem);
+      const mCpu = $('#mCpu');
+      if (mCpu) mCpu.textContent = cpu != null ? `CPU ${cpu}%` : 'CPU —';
+      const mMem = $('#mMem');
+      if (mMem) mMem.textContent = mem != null ? `RAM ${mem}%` : 'RAM —';
+      const mHost = $('#mHost');
+      if (mHost && !mHost.textContent) mHost.textContent = s.hostname || '';
       const tempEl = $('#trayTemp');
       if (tempEl) {
         tempEl.textContent = s.cpu_temp_c != null ? `${s.cpu_temp_c}°C` : '';
@@ -725,10 +833,42 @@
     $('.win-titlebar', el).addEventListener('dblclick', toggleMax);
 
     makeDraggable(el, $('.win-titlebar', el));
+    makeSwipeToClose(el, $('.win-titlebar', el), id);
     makeResizable(el);
     focusWin(id);
     scheduleSessionSave();
     return rec;
+  }
+
+  function makeSwipeToClose(win, bar, id) {
+    let sy = 0, dy = 0, tracking = false;
+    bar.addEventListener('pointerdown', (e) => {
+      if (!isMobile()) return;
+      if (e.target.closest('button')) return;
+      tracking = true;
+      sy = e.clientY;
+      dy = 0;
+      win.style.transition = 'none';
+      try { bar.setPointerCapture(e.pointerId); } catch { /* */ }
+    }, { capture: true });
+    bar.addEventListener('pointermove', (e) => {
+      if (!tracking) return;
+      dy = Math.max(0, e.clientY - sy);
+      if (dy > 4) win.style.transform = `translateY(${Math.min(dy, 240)}px)`;
+    }, { capture: true });
+    const release = () => {
+      if (!tracking) return;
+      tracking = false;
+      win.style.transition = 'transform .18s ease';
+      if (dy > 90) {
+        win.style.transform = `translateY(${win.offsetHeight}px)`;
+        setTimeout(() => closeWin(id), 160);
+      } else {
+        win.style.transform = '';
+      }
+    };
+    bar.addEventListener('pointerup', release, { capture: true });
+    bar.addEventListener('pointercancel', release, { capture: true });
   }
 
   function makeDraggable(win, bar) {
@@ -736,6 +876,7 @@
     const recOf = () => windows.get(win.dataset.win);
     bar.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      if (isMobile()) return; // fullscreen sheets: swipe-to-close owns the gesture
       if (e.target.closest('button')) return;
       const rec = recOf();
       // Unsnap / unmaximize on drag start, keeping pointer offset sensible
@@ -1438,6 +1579,7 @@
           state.selectedEntry = null;
           const p = places.find((x) => x.id === btn.dataset.root);
           showDetailsPlace(p);
+          if (isMobile()) btn.ondblclick();
         };
       });
     };
@@ -1598,7 +1740,12 @@
         selectPaths([path]);
         state.lastClickedPath = path;
       };
-      el.addEventListener('click', (ev) => select(ev));
+      el.addEventListener('click', (ev) => {
+        select(ev);
+        if (isMobile() && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
+          openEntry(state.selectedEntry || { path, is_dir: el.dataset.dir === '1', name: path?.split('/').pop() });
+        }
+      });
       el.addEventListener('dblclick', () => {
         selectPaths([path]);
         openEntry(state.selectedEntry || {
@@ -3191,6 +3338,18 @@
           </section>
 
           <section class="settings-section">
+            <h3>Layout</h3>
+            <p class="muted" style="font-size:12px;margin:0 0 6px">Mobile shell auto-detects narrow screens and touch (coarse pointer). Override here.</p>
+            <label>Layout mode
+              <select data-act="layout-force">
+                <option value="auto" ${getLayoutForce() === 'auto' ? 'selected' : ''}>Auto-detect</option>
+                <option value="mobile" ${getLayoutForce() === 'mobile' ? 'selected' : ''}>Force mobile</option>
+                <option value="desktop" ${getLayoutForce() === 'desktop' ? 'selected' : ''}>Force desktop</option>
+              </select>
+            </label>
+          </section>
+
+          <section class="settings-section">
             <h3>Apps</h3>
             <div class="settings-row">
               <button type="button" data-act="open-term">Open Terminal</button>
@@ -3304,6 +3463,7 @@
         applyDesktopAppearance();
       } catch (e) { alert(e.message); }
     };
+    $('[data-act="layout-force"]', root).onchange = (e) => setLayoutForce(e.target.value);
     $('[data-act="open-term"]', root).onclick = () => openTerminal();
     $('[data-act="open-browser"]', root).onclick = () => openBrowser();
     $('[data-act="clear-session"]', root).onclick = () => {
@@ -3336,8 +3496,8 @@
     }
     img.style.display = '';
     const src = url
-      ? apiUrl(String(url).replace(/^\//, '') + (String(url).includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(CFG.version || '320'))
-      : apiUrl(`static/${name}?v=${encodeURIComponent(CFG.version || '320')}`);
+      ? apiUrl(String(url).replace(/^\//, '') + (String(url).includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(CFG.version || '330'))
+      : apiUrl(`static/${name}?v=${encodeURIComponent(CFG.version || '330')}`);
     img.src = src;
     img.onerror = () => { img.style.display = 'none'; };
   }
@@ -3392,12 +3552,15 @@
 
   /* ── Init ───────────────────────────────────────────────────────────── */
   async function init() {
+    initMobileShell();
     tickClock();
     setInterval(tickClock, 15000);
     try {
       CFG = await api('api/config');
       document.title = `${CFG.title || 'Fox OS'} — ${CFG.hostname || ''}`;
       $('#trayHost').textContent = CFG.hostname || '';
+      const mHost = $('#mHost');
+      if (mHost) mHost.textContent = CFG.hostname || '';
       applyDesktopAppearance();
       applyWallpaper();
       renderDesktopIcons();
@@ -3440,7 +3603,7 @@
       startSearch.addEventListener('click', (e) => e.stopPropagation());
     }
     document.addEventListener('click', (e) => {
-      if (!e.target.closest('#startMenu') && !e.target.closest('#startBtn')) closeStart();
+      if (!e.target.closest('#startMenu') && !e.target.closest('#startBtn') && !e.target.closest('#mobileDock')) closeStart();
       if (!e.target.closest('.ctx-menu')) closeContextMenu();
     });
     document.addEventListener('contextmenu', (e) => {
