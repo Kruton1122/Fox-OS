@@ -86,7 +86,11 @@ def _default_config() -> dict:
         "trash_max_age_days": 30,
         # Opt-in: launch system Chromium on the *server* display (kiosk). Default false.
         "allow_system_browser": False,
-        # Terminal app: embed_map key (e.g. "wetty") and/or direct URL
+        # Opt-in: in-app PTY terminal (xterm.js ↔ WebSocket). Default false — shell as Fox OS user.
+        "allow_terminal": False,
+        # Side WebSocket listener (Waitress cannot do WS). Bound to 127.0.0.1 only.
+        "terminal_ws_port": 8766,
+        # Deprecated (v3.2.0 Wetty plan): ignored by Terminal app; kept for config compatibility.
         "terminal_embed": "",
         "terminal_url": "",
     }
@@ -645,7 +649,7 @@ def _builtin_apps() -> list[dict]:
         {"id": "notes", "label": "Notes", "action": "notes", "icon": "📝", "desc": "Sticky notes"},
         {"id": "calc", "label": "Calculator", "action": "calc", "icon": "🔢", "desc": "Quick math"},
         {"id": "browser", "label": "Browser", "action": "browser", "icon": "🌐", "desc": "Browse the web in Fox OS"},
-        {"id": "terminal", "label": "Terminal", "action": "terminal", "icon": "⌨", "desc": "Web terminal (Wetty / embed)"},
+        {"id": "terminal", "label": "Terminal", "action": "terminal", "icon": "⌨", "desc": "PTY shell (xterm.js; allow_terminal)"},
         {"id": "settings", "label": "Settings", "action": "settings", "icon": "🔧", "desc": "Fox OS options"},
     ]
 
@@ -1040,6 +1044,10 @@ def api_config():
         "allow_write": CFG.get("allow_write", False),
         "allow_system_browser": bool(CFG.get("allow_system_browser", False)),
         "system_browser_available": _find_system_browser() is not None,
+        "allow_terminal": bool(CFG.get("allow_terminal", False)),
+        "terminal_ws_port": int(CFG.get("terminal_ws_port") or 8766),
+        "terminal_ws_path": "/ws/terminal",
+        # Deprecated Wetty keys (Terminal app ignores; still echoed for older UIs)
         "terminal_embed": CFG.get("terminal_embed") or "",
         "terminal_url": CFG.get("terminal_url") or "",
         "user": pwd.getpwuid(os.getuid()).pw_name,
@@ -1053,6 +1061,7 @@ def api_config():
             "docker_control": bool(CFG.get("allow_docker_control", False)),
             "trash": trash_enabled(),
             "system_browser": bool(CFG.get("allow_system_browser", False)),
+            "terminal": bool(CFG.get("allow_terminal", False)),
         },
         "trash_caps": {
             "max_items": _trash_max_items(),
@@ -2327,6 +2336,29 @@ def api_files_zip():
         return jsonify({"error": str(e)}), 500
 
 
+
+
+@app.get("/api/terminal")
+def api_terminal_status():
+    """Terminal enablement + WS proxy hints. 403 when allow_terminal is false."""
+    if not CFG.get("allow_terminal", False):
+        return jsonify({
+            "error": "terminal disabled (allow_terminal=false)",
+            "hint": "Set allow_terminal=true in config.json and restart Fox OS. "
+                    "Proxy /ws/terminal to 127.0.0.1:<terminal_ws_port> (WebSocket upgrade).",
+            "allow_terminal": False,
+        }), 403
+    port = int(CFG.get("terminal_ws_port") or 8766)
+    return jsonify({
+        "ok": True,
+        "allow_terminal": True,
+        "ws_path": "/ws/terminal",
+        "listen": f"127.0.0.1:{port}",
+        "shell": os.environ.get("SHELL") or "/bin/bash",
+        "user": pwd.getpwuid(os.getuid()).pw_name,
+    })
+
+
 @app.post("/api/browser/open")
 def api_browser_open():
     """Opt-in: open http(s) URL in system Chromium on the server display.
@@ -2369,6 +2401,26 @@ def main():
     port = int(CFG.get("port", 8765))
     threads = int(CFG.get("threads") or 8)
     print(f"Fox OS v{VERSION} on http://{host}:{port} (waitress, threads={threads})")
+
+    # Waitress cannot terminate WebSockets — optional side listener for PTY terminal.
+    if CFG.get("allow_terminal", False):
+        try:
+            from terminal_ws import start_terminal_ws
+            ws_port = int(CFG.get("terminal_ws_port") or 8766)
+            ok = start_terminal_ws(
+                host="127.0.0.1",
+                port=ws_port,
+                allow_check=lambda: bool(CFG.get("allow_terminal", False)),
+            )
+            if ok:
+                print(f"Terminal PTY WebSocket on ws://127.0.0.1:{ws_port} — proxy /ws/terminal → there")
+            else:
+                print("WARNING: allow_terminal=true but terminal WebSocket failed to start (is websockets installed?)")
+        except Exception as e:
+            print(f"WARNING: terminal WebSocket not started: {e}")
+    else:
+        print("Terminal PTY disabled (allow_terminal=false)")
+
     try:
         from waitress import serve
     except ImportError:

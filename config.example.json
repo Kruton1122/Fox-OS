@@ -9,26 +9,35 @@
       "label": "Home",
       "path": "~",
       "kind": "local",
-      "icon": "🏠"
+      "icon": "\ud83c\udfe0"
     }
   ],
   "default_root": "home",
   "allow_write": true,
-  "write_roots": ["home"],
+  "write_roots": [
+    "home"
+  ],
   "max_upload_mb": 512,
   "threads": 8,
   "trash_enabled": true,
   "trash_max_mb": 1024,
   "trash_max_age_days": 30,
   "trash_max_items": 200,
-  "services": ["ssh", "cron", "docker", "nginx"],
+  "services": [
+    "ssh",
+    "cron",
+    "docker",
+    "nginx"
+  ],
   "services_auto": true,
   "discover_desktop_apps": true,
   "discover_docker": true,
   "allow_service_control": false,
   "allow_docker_control": false,
   "allow_system_browser": false,
-  "terminal_embed": "wetty",
+  "allow_terminal": false,
+  "terminal_ws_port": 8766,
+  "terminal_embed": "",
   "terminal_url": "",
   "apps": [],
   "links": [
@@ -36,15 +45,20 @@
       "id": "example",
       "label": "Example",
       "url": "https://example.com/",
-      "icon": "🔗",
+      "icon": "\ud83d\udd17",
       "group": "Bookmarks"
     }
   ],
   "quick_access": [
-    { "id": "qa-home", "label": "Home", "root": "home", "path": "", "icon": "🏠" }
+    {
+      "id": "qa-home",
+      "label": "Home",
+      "root": "home",
+      "path": "",
+      "icon": "\ud83c\udfe0"
+    }
   ],
   "embed_map": {
-    "myapp.local": "myapp",
-    "wetty.home": "wetty"
+    "myapp.local": "myapp"
   }
 }

@@ -1161,3 +1161,29 @@ html[data-icon-size="lg"] .desk-icon .ico { font-size: 40px; }
 html[data-icon-size="lg"] .desk-icon { width: 96px; }
 
 .desk-widgets.hidden { display: none !important; }
+
+
+/* ── Terminal (xterm.js PTY) ───────────────────────────────────────────── */
+.term-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #0b1220;
+  color: #e6edf7;
+}
+.term-status {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.35);
+}
+.term-status.ok { color: #7dcea0; }
+.term-screen {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 4px;
+}
+.term-screen .xterm { height: 100%; }
+.term-screen .xterm-viewport { overflow-y: auto !important; }

@@ -2999,68 +2999,149 @@
     scheduleSessionSave();
   }
 
-  /* ── Terminal (Wetty / embed passthrough) ───────────────────────────── */
-  function resolveTerminalTarget() {
-    const embedKey = (CFG?.terminal_embed || '').trim();
-    if (embedKey) {
-      return { kind: 'embed', url: `/embed/${embedKey}/`, label: 'Terminal', external: CFG?.terminal_url || '' };
+  /* ── Terminal (xterm.js + PTY WebSocket; not Wetty) ─────────────────── */
+  function terminalWsUrl() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const path = (CFG?.terminal_ws_path || '/ws/terminal').replace(/^\//, '');
+    // Honor subpath installs (e.g. /foxos/) so proxy can map /foxos/ws/terminal
+    let prefix = location.pathname.replace(/\/+$/, '');
+    if (prefix.endsWith('.html')) {
+      prefix = prefix.replace(/\/[^/]*$/, '');
     }
-    const direct = (CFG?.terminal_url || '').trim();
-    if (direct) {
-      return { kind: 'url', url: toEmbedUrl(direct), label: 'Terminal', external: direct };
-    }
-    // Prefer configured wetty app / link
-    const wettyApp = (CFG?.apps || []).find((a) => a.id === 'wetty' || /wetty/i.test(a.label || ''));
-    if (wettyApp?.url || wettyApp?.embed) {
-      const u = wettyApp.embed || wettyApp.url;
-      return { kind: 'url', url: toEmbedUrl(u), label: wettyApp.label || 'Terminal', external: wettyApp.url || u };
-    }
-    const wettyLink = (CFG?.links || []).find((l) => l.id === 'wetty' || /wetty|terminal/i.test(l.label || ''));
-    if (wettyLink?.url) {
-      return { kind: 'url', url: toEmbedUrl(wettyLink.url), label: wettyLink.label || 'Terminal', external: wettyLink.url };
-    }
-    // embed_map value "wetty"
-    const map = CFG?.embed_map || {};
-    if (Object.values(map).includes('wetty')) {
-      return { kind: 'embed', url: '/embed/wetty/', label: 'Terminal', external: '' };
-    }
-    return null;
+    if (prefix === '/' || prefix === '') prefix = '';
+    return `${proto}//${location.host}${prefix}/${path}`;
   }
 
   function openTerminal() {
-    const target = resolveTerminalTarget();
-    if (!target) {
+    const id = 'terminal';
+    if (windows.has(id)) { focusWin(id); return; }
+
+    const allowed = !!(CFG?.allow_terminal || CFG?.features?.terminal);
+    if (!allowed) {
       createWindow({
         id: 'terminal-setup',
         title: 'Terminal setup',
         icon: '⌨',
-        width: 480,
-        height: 320,
+        width: 520,
+        height: 380,
         bodyHtml: `
           <div class="settings">
-            <h2>Terminal not configured</h2>
-            <p>Fox OS embeds a web terminal (e.g. <strong>Wetty</strong>) — it does not invent SSH passwords.</p>
+            <h2>Terminal disabled</h2>
+            <p>Fox OS ships an in-app <strong>PTY</strong> terminal (xterm.js) — not Wetty.</p>
             <ol>
-              <li>Run Wetty (or similar) behind your reverse proxy.</li>
-              <li>Add <code>"wetty.home": "wetty"</code> (or your host) to <code>embed_map</code>.</li>
-              <li>Set <code>terminal_embed</code> to <code>"wetty"</code> and/or <code>terminal_url</code> to the public URL in <code>config.json</code>.</li>
+              <li>Install dep: <code>pip install websockets</code> (see requirements.txt).</li>
+              <li>Set <code>"allow_terminal": true</code> in private <code>config.json</code>.</li>
+              <li>Restart the Fox OS service (side WebSocket listens on <code>127.0.0.1:terminal_ws_port</code>, default 8766).</li>
+              <li>Reverse-proxy <code>/ws/terminal</code> with WebSocket upgrade to that port (see README / nginx-foxos.conf).</li>
             </ol>
-            <p class="muted">See config.example.json · restart Fox OS after editing config.</p>
+            <p class="muted">Default is off: the shell runs as the Fox OS process user. Prefer proxy auth before enabling.</p>
           </div>`,
       });
       return;
     }
-    openWebApp({
-      id: 'terminal',
-      title: target.label || 'Terminal',
+
+    const rec = createWindow({
+      id,
+      title: 'Terminal',
       icon: '⌨',
-      url: target.url,
-      externalUrl: target.external || target.url,
       width: Math.min(900, window.innerWidth - 48),
       height: Math.min(560, window.innerHeight - 80),
+      bodyHtml: `
+        <div class="term-app">
+          <div class="term-status muted" data-act="status">Connecting…</div>
+          <div class="term-screen" data-act="screen"></div>
+        </div>`,
     });
-    const rec = windows.get('terminal');
-    if (rec) rec.session = { app: 'terminal', url: target.url };
+    rec.session = { app: 'terminal' };
+    mountXterm(rec);
+  }
+
+  function mountXterm(rec) {
+    const root = rec.el;
+    const screen = $('[data-act="screen"]', root);
+    const status = $('[data-act="status"]', root);
+    if (!window.Terminal) {
+      status.textContent = 'xterm.js failed to load (static/vendor/xterm/).';
+      return;
+    }
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontSize: 13,
+      theme: { background: '#0b1220', foreground: '#e6edf7' },
+      allowProposedApi: true,
+    });
+    const FitCtor = window.FitAddon?.FitAddon || window.FitAddon;
+    const fit = FitCtor ? new FitCtor() : null;
+    if (fit) term.loadAddon(fit);
+    term.open(screen);
+    if (fit) {
+      try { fit.fit(); } catch (_) { /* ignore */ }
+    }
+
+    const wsUrl = terminalWsUrl();
+    status.textContent = `Connecting ${wsUrl}…`;
+    let ws;
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (e) {
+      status.textContent = `WebSocket error: ${e.message || e}`;
+      return;
+    }
+    ws.binaryType = 'arraybuffer';
+
+    const sendResize = () => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    };
+
+    ws.onopen = () => {
+      status.textContent = `${CFG?.user || 'user'}@${CFG?.hostname || 'host'} · PTY`;
+      status.classList.add('ok');
+      sendResize();
+      term.focus();
+    };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === 'string') term.write(ev.data);
+      else term.write(new Uint8Array(ev.data));
+    };
+    ws.onerror = () => {
+      status.textContent = 'WebSocket error — is /ws/terminal proxied to terminal_ws_port?';
+      status.classList.remove('ok');
+    };
+    ws.onclose = (ev) => {
+      status.classList.remove('ok');
+      if (ev.code === 4403) {
+        status.textContent = 'Terminal disabled on server (allow_terminal=false).';
+      } else {
+        status.textContent = `Disconnected (${ev.code}). Re-open Terminal to reconnect.`;
+      }
+    };
+
+    term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    });
+    term.onResize(() => sendResize());
+
+    const onWinResize = () => {
+      if (fit) {
+        try { fit.fit(); } catch (_) { /* ignore */ }
+      }
+      sendResize();
+    };
+    window.addEventListener('resize', onWinResize);
+    // Fit after window chrome lays out
+    setTimeout(onWinResize, 50);
+    setTimeout(onWinResize, 250);
+
+    const prevClose = rec.onClose;
+    rec.onClose = () => {
+      window.removeEventListener('resize', onWinResize);
+      try { ws.close(); } catch (_) { /* ignore */ }
+      try { term.dispose(); } catch (_) { /* ignore */ }
+      if (typeof prevClose === 'function') prevClose();
+    };
   }
 
   /* ── Settings ───────────────────────────────────────────────────────── */
@@ -3115,7 +3196,7 @@
               <button type="button" data-act="open-term">Open Terminal</button>
               <button type="button" data-act="open-browser">Open Browser</button>
             </div>
-            <p class="muted" style="font-size:12px">System Chromium launch: ${CFG.allow_system_browser ? (CFG.system_browser_available ? '✓ allowed' : 'allowed (binary missing)') : '— off (config allow_system_browser)'} · opens on the <em>server</em> display.</p>
+            <p class="muted" style="font-size:12px">System Chromium: ${CFG.allow_system_browser ? (CFG.system_browser_available ? '✓ allowed' : 'allowed (binary missing)') : '— off'} · Terminal PTY: ${CFG.allow_terminal ? '✓ allow_terminal' : '— off (config allow_terminal)'}.</p>
           </section>
 
           <section class="settings-section">
@@ -3138,7 +3219,7 @@
             </div>
           </section>
 
-          <p class="muted" style="font-size:12px;margin-top:12px">Dangerous control flags are not toggleable here. Edit <code>config.json</code> on the server for roots, embed_map, terminal_*, allow_system_browser.</p>
+          <p class="muted" style="font-size:12px;margin-top:12px">Dangerous control flags are not toggleable here. Edit <code>config.json</code> on the server for roots, embed_map, allow_terminal, allow_system_browser.</p>
         </div>`,
     });
     rec.session = { app: 'settings' };

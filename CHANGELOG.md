@@ -18,17 +18,19 @@ Desktop plus: Explorer power features, wallpaper & Settings, Browser + Terminal 
 - **Wallpaper Settings** — list / upload (png/jpg/webp/svg) / select / reset. Uploads in `data/wallpapers/` (gitignored). Preference overlay in `data/desktop.json` (not whole `config.json`). Served via `/api/wallpaper/*`; merged into `/api/config`.
 - **Appearance** — show widgets, icon size, optional accent/titlebar color (CSS variables) persisted in `data/desktop.json`.
 - **Browser app** — in-Fox-OS window with address bar + nav; friendly message when iframe blocked + Open externally. Opt-in **system Chromium** via `allow_system_browser` (default **false**) and `POST /api/browser/open` (fixed argv, http(s) URL only).
-- **Terminal app** — opens Wetty / configured embed via `terminal_embed` or `terminal_url` (setup hint if missing).
+- **Terminal app** — proper **PTY passthrough** with vendored **xterm.js** (+ fit addon) and a localhost WebSocket side listener (`terminal_ws.py`). Opt-in via `allow_terminal` (default **false**). **Not Wetty** / not an iframe to wetty.home.
 
 ### Changed
 
-- Version bumped to **3.2.0**; static asset cache busters (`?v=320`).
+- Version bumped to **3.2.0**; static asset cache busters (`?v=321` after Terminal PTY patch).
 - Settings expanded beyond read-only feature list (wallpaper, appearance, status, session controls). Service/Docker control flags remain **status-only** in the UI.
-- `config.example.json` documents `allow_system_browser`, `terminal_embed`, `terminal_url`, and sample `wetty.home` embed_map entry.
+- Terminal plan changed from Wetty embed to in-app PTY; `terminal_embed` / `terminal_url` deprecated.
+- `config.example.json` documents `allow_system_browser`, `allow_terminal`, `terminal_ws_port`.
 
 ### Security
 
 - System browser launch never accepts client argv beyond a sanitized http(s) URL; binary resolved via `shutil.which` allowlist; flag default false.
+- Terminal PTY (`allow_terminal`) default **false**; WebSocket listener binds **127.0.0.1 only**; `GET /api/terminal` returns **403** when disabled.
 - File copy/move/zip/bulk-delete validate every path with `resolve_safe`; writes require `write_allowed`.
 
 ## [3.1.1] — 2026-09-01

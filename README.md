@@ -26,7 +26,7 @@ Inspired by Cockpit, CasaOS, and classic File Explorer.
 | **Notes / Calculator** | Desktop utilities |
 | **Recycle Bin** | Soft-delete trash with restore / empty; size & age caps (`trash_max_mb`, `trash_max_age_days`) |
 | **Browser** | In-desktop iframe browser (address bar + nav); optional server Chromium via `allow_system_browser` |
-| **Terminal** | Wetty / embed passthrough (`terminal_embed` / `terminal_url`) |
+| **Terminal** | In-app PTY via xterm.js + WebSocket (`allow_terminal`, default off) |
 | **Desktop chrome** | Resizable windows, snap, Start search, taskbar previews/grouping, session restore, wallpaper Settings |
 
 Safety first: path jail under configured roots, optional writes, **no arbitrary command execution** from the web UI. Service/Docker controls (when enabled) use fixed argv + strict allowlists only.
@@ -89,8 +89,9 @@ Copy from `config.example.json`. Important keys:
 | `trash_max_age_days` | Auto-purge trash older than N days (default `30`; `0` = unlimited) |
 | `trash_max_items` | Max trash entries before oldest are dropped (default `200`) |
 | `allow_system_browser` | Allow `POST /api/browser/open` to launch Chromium on the **server** display (default **`false`**) |
-| `terminal_embed` | `embed_map` key for the Terminal app (e.g. `"wetty"`) |
-| `terminal_url` | Optional direct terminal URL (also resolved through `embed_map` when possible) |
+| `allow_terminal` | Enable in-app PTY Terminal (xterm.js ↔ WebSocket). Default **`false`** — shell runs as the Fox OS process user |
+| `terminal_ws_port` | Localhost-only side WebSocket port for the PTY (default `8766`; Waitress cannot do WS) |
+| `terminal_embed` / `terminal_url` | **Deprecated** (Wetty-era). Ignored by the Terminal app; safe to leave empty |
 
 Appearance overlays (wallpaper choice, widgets, icon size, accent) live in **`data/desktop.json`** (gitignored) and merge into `/api/config` — they do not rewrite `config.json`.
 
@@ -219,17 +220,25 @@ cp static/wallpaper.default.svg static/wallpaper.png   # or use your own PNG/JPG
 
 - **Browser** app embeds pages in an iframe. Sites that send `X-Frame-Options` / CSP `frame-ancestors` show a friendly fallback with **Open externally**.
 - **System Chromium** (optional): set `"allow_system_browser": true` in private `config.json`. Fox OS resolves `chromium` / `chromium-browser` / `google-chrome` via `PATH` and runs fixed argv `--new-window <url>`. Useful on a Pi kiosk **server display**; remote users should use the iframe Browser.
-- **Terminal** app: set `"terminal_embed": "wetty"` and map your host in `embed_map` (e.g. `"wetty.home": "wetty"`), or set `terminal_url`. Fox OS does not store SSH passwords.
+- **Terminal** app is a proper **PTY passthrough** (vendored **xterm.js** + fit addon), **not Wetty** and not an iframe to wetty.home.
+  - Set `"allow_terminal": true` in private `config.json` (default **false**).
+  - On start, Fox OS opens a **localhost-only** WebSocket listener on `terminal_ws_port` (default `8766`) because **Waitress does not support WebSockets**.
+  - Reverse-proxy `/ws/terminal` (or `/foxos/ws/terminal` under a subpath) with Upgrade headers to `http://127.0.0.1:8766/` — see `nginx-foxos.conf`.
+  - Each session runs `$SHELL` or `/bin/bash` as the Fox OS process user; resize uses `TIOCSWINSZ`.
+  - `GET /api/terminal` returns status, or **403** when disabled.
+  - Deprecated keys `terminal_embed` / `terminal_url` remain in the example config for compatibility but are ignored by the Terminal app.
 
 ## Security notes
 
 - Prefer `host: 127.0.0.1` + reverse proxy + auth (Authelia, Basic Auth, VPN, …)
 - Limit `write_roots`
 - Keep `allow_service_control` / `allow_docker_control` **false** unless you trust every browser client that can reach Fox OS
-- Do not expose write-enabled (or control-enabled) Fox OS to the public internet without auth
+- Keep **`allow_terminal` false** unless you trust every browser client that can reach Fox OS — it is a full interactive shell as the Fox OS user
+- Do not expose write-enabled (or control-enabled / terminal-enabled) Fox OS to the public internet without auth
 - File APIs reject path traversal outside configured roots
 - Control APIs reject unknown units/containers and never run arbitrary shell
 - `allow_system_browser` stays false unless you intend kiosk Chromium on the server display
+- Terminal WebSocket binds **127.0.0.1 only**; never publish `terminal_ws_port` directly to the LAN/WAN
 
 ## Reverse proxy (nginx sketch)
 
@@ -241,9 +250,19 @@ location / {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
+
+# When allow_terminal=true — WebSocket upgrade to the side PTY listener
+location /ws/terminal {
+    proxy_pass http://127.0.0.1:8766/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 3600s;
+}
 ```
 
-Optional same-origin embeds for other apps live under your proxy as `/embed/<name>/` — configure `embed_map` if you use that pattern.
+Optional same-origin embeds for other apps live under your proxy as `/embed/<name>/` — configure `embed_map` if you use that pattern. Nginx Proxy Manager: add a custom location for `/ws/terminal` (or `/foxos/ws/terminal`) with WebSockets enabled to `127.0.0.1:8766`.
 
 ## Project layout
 
