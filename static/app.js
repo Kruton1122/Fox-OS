@@ -1,4 +1,4 @@
-/* Fox OS frontend — window manager + apps v2 */
+/* Fox OS frontend — window manager + apps v3.1 */
 (() => {
   'use strict';
 
@@ -9,6 +9,16 @@
   let zTop = 20;
   const windows = new Map();
   let trayTimer = null;
+  const ICON_POS_KEY = 'foxos.iconPositions.v1';
+  let ctxMenuEl = null;
+  let cycleIdx = -1;
+
+  const CODE_EXTS = new Set([
+    'py', 'js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'go', 'rs', 'c', 'cpp', 'cc', 'h', 'hpp',
+    'java', 'kt', 'swift', 'rb', 'php', 'sh', 'bash', 'zsh', 'ps1', 'sql', 'r', 'lua',
+    'json', 'yml', 'yaml', 'toml', 'ini', 'conf', 'cfg', 'env', 'xml', 'html', 'css',
+    'scss', 'less', 'vue', 'svelte', 'dockerfile', 'makefile', 'cmake', 'gradle',
+  ]);
 
   const fmtSize = (n) => {
     if (n == null || n === 0) return '—';
@@ -74,16 +84,36 @@
   }
 
   /* ── Desktop chrome ─────────────────────────────────────────────────── */
+  function loadIconPositions() {
+    try {
+      return JSON.parse(localStorage.getItem(ICON_POS_KEY) || '{}') || {};
+    } catch {
+      return {};
+    }
+  }
+  function saveIconPositions(map) {
+    try { localStorage.setItem(ICON_POS_KEY, JSON.stringify(map)); } catch { /* */ }
+  }
+
   function renderDesktopIcons() {
     const host = $('#icons');
     if (!host || !CFG) return;
     const apps = CFG.apps || [];
-    host.innerHTML = apps.map((a) => `
-      <button type="button" class="desk-icon" data-app="${a.id}" title="${escapeHtml(a.desc || a.label)}">
+    const pos = loadIconPositions();
+    const hasAny = apps.some((a) => pos[a.id] && Number.isFinite(pos[a.id].x));
+    host.classList.toggle('icon-freeform', hasAny);
+    host.innerHTML = apps.map((a) => {
+      const p = pos[a.id];
+      const style = p && Number.isFinite(p.x)
+        ? `left:${Math.max(0, p.x)}px;top:${Math.max(0, p.y)}px;`
+        : '';
+      const placed = style ? ' placed' : '';
+      return `
+      <button type="button" class="desk-icon${placed}" data-app="${a.id}" title="${escapeHtml(a.desc || a.label)}" style="${style}">
         <span class="ico">${a.icon || '📦'}</span>
         <span class="lbl">${escapeHtml(a.label)}</span>
-      </button>
-    `).join('');
+      </button>`;
+    }).join('');
     host.querySelectorAll('.desk-icon').forEach((btn) => {
       btn.addEventListener('dblclick', () => openApp(btn.dataset.app));
       btn.addEventListener('click', (e) => {
@@ -93,6 +123,66 @@
           openApp(btn.dataset.app);
         }
       });
+      btn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        $$('.desk-icon').forEach((b) => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        showContextMenu(e.clientX, e.clientY, [
+          { label: 'Open', action: () => openApp(btn.dataset.app) },
+          { sep: true },
+          { label: 'Reset icon position', action: () => {
+            const m = loadIconPositions();
+            delete m[btn.dataset.app];
+            saveIconPositions(m);
+            renderDesktopIcons();
+          }},
+        ]);
+      });
+      makeIconDraggable(btn);
+    });
+  }
+
+  function makeIconDraggable(btn) {
+    let sx, sy, ox, oy, dragging = false, moved = false;
+    btn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      dragging = true;
+      moved = false;
+      sx = e.clientX; sy = e.clientY;
+      const host = $('#icons');
+      const hr = host.getBoundingClientRect();
+      const br = btn.getBoundingClientRect();
+      ox = br.left - hr.left;
+      oy = br.top - hr.top;
+      btn.setPointerCapture(e.pointerId);
+    });
+    btn.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - sx;
+      const dy = e.clientY - sy;
+      if (!moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+      moved = true;
+      const host = $('#icons');
+      host.classList.add('icon-freeform');
+      btn.classList.add('placed');
+      const maxX = Math.max(0, host.clientWidth - btn.offsetWidth);
+      const maxY = Math.max(0, host.clientHeight - btn.offsetHeight);
+      const nx = Math.min(maxX, Math.max(0, ox + dx));
+      const ny = Math.min(maxY, Math.max(0, oy + dy));
+      btn.style.left = `${nx}px`;
+      btn.style.top = `${ny}px`;
+    });
+    btn.addEventListener('pointerup', () => {
+      if (!dragging) return;
+      dragging = false;
+      if (!moved) return;
+      const m = loadIconPositions();
+      m[btn.dataset.app] = {
+        x: parseFloat(btn.style.left) || 0,
+        y: parseFloat(btn.style.top) || 0,
+      };
+      saveIconPositions(m);
     });
   }
 
@@ -143,27 +233,103 @@
       const s = await api('api/system');
       const cpu = s.cpu_percent;
       const mem = s.memory?.percent;
-      const cpuEl = $('#trayCpu');
-      const memEl = $('#trayMem');
-      if (cpuEl) cpuEl.textContent = cpu != null ? `CPU ${cpu}%` : 'CPU —';
-      if (memEl) memEl.textContent = mem != null ? `RAM ${mem}%` : 'RAM —';
+      const setMeter = (el, barId, label, pct) => {
+        if (!el) return;
+        const span = el.querySelector('span') || el;
+        span.textContent = label;
+        const bar = barId ? document.getElementById(barId) : el.querySelector('i');
+        if (bar) bar.style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
+      };
+      setMeter($('#trayCpu'), 'trayCpuBar', cpu != null ? `CPU ${cpu}%` : 'CPU —', cpu);
+      setMeter($('#trayMem'), 'trayMemBar', mem != null ? `RAM ${mem}%` : 'RAM —', mem);
+      const tempEl = $('#trayTemp');
+      if (tempEl) {
+        tempEl.textContent = s.cpu_temp_c != null ? `${s.cpu_temp_c}°C` : '';
+        tempEl.style.display = s.cpu_temp_c != null ? '' : 'none';
+      }
+      const diskEl = $('#trayDisk');
+      if (diskEl) {
+        const rootDisk = (s.disks || []).find((d) => d.mount === '/') || (s.disks || [])[0];
+        if (rootDisk) {
+          diskEl.textContent = `${fmtSize(rootDisk.available)} free`;
+          diskEl.title = `${rootDisk.mount}: ${rootDisk.percent} used · ${fmtSize(rootDisk.available)} free of ${fmtSize(rootDisk.size)}`;
+          diskEl.style.display = '';
+        } else {
+          diskEl.textContent = '';
+          diskEl.style.display = 'none';
+        }
+      }
 
       const w = $('#widgets');
       if (w) {
+        const rootDisk = (s.disks || []).find((d) => d.mount === '/') || (s.disks || [])[0];
+        const diskHtml = rootDisk ? `
+            <div class="widget-row"><span>Disk ${escapeHtml(rootDisk.mount)}</span><strong>${rootDisk.percent}</strong></div>
+            <div class="meter"><i style="width:${parseInt(rootDisk.percent, 10) || 0}%"></i></div>
+            <div class="disk-row">${fmtSize(rootDisk.available)} free · ${fmtSize(rootDisk.size)}</div>` : '';
         w.innerHTML = `
           <div class="widget">
             <div class="widget-title">🦊 ${escapeHtml(s.hostname || '')}</div>
             <div class="widget-row"><span>Uptime</span><strong>${escapeHtml(s.uptime_human || '—')}</strong></div>
             <div class="widget-row"><span>Load</span><strong>${(s.load?.['1'] ?? 0).toFixed?.(2) ?? s.load?.['1']}</strong></div>
             <div class="widget-row"><span>CPU</span><strong>${cpu != null ? cpu + '%' : '—'}${s.cpu_temp_c != null ? ' · ' + s.cpu_temp_c + '°C' : ''}</strong></div>
-            <div class="meter"><i style="width:${cpu || 0}%"></i></div>
+            <div class="meter hot"><i style="width:${cpu || 0}%"></i></div>
             <div class="widget-row"><span>RAM</span><strong>${mem != null ? mem + '%' : '—'}</strong></div>
             <div class="meter"><i style="width:${mem || 0}%"></i></div>
+            ${diskHtml}
           </div>`;
       }
     } catch {
       /* ignore tray errors */
     }
+  }
+
+  /* ── Context menu ───────────────────────────────────────────────────── */
+  function closeContextMenu() {
+    if (ctxMenuEl) {
+      ctxMenuEl.remove();
+      ctxMenuEl = null;
+    }
+  }
+  function showContextMenu(x, y, items) {
+    closeContextMenu();
+    const menu = document.createElement('div');
+    menu.className = 'ctx-menu';
+    menu.setAttribute('role', 'menu');
+    items.forEach((it) => {
+      if (it.sep) {
+        const sep = document.createElement('div');
+        sep.className = 'ctx-sep';
+        menu.appendChild(sep);
+        return;
+      }
+      if (it.hint) {
+        const h = document.createElement('div');
+        h.className = 'ctx-hint';
+        h.textContent = it.hint;
+        menu.appendChild(h);
+        return;
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ctx-item';
+      btn.textContent = it.label;
+      btn.disabled = !!it.disabled;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeContextMenu();
+        if (it.action) it.action();
+      });
+      menu.appendChild(btn);
+    });
+    document.body.appendChild(menu);
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const mw = menu.offsetWidth;
+    const mh = menu.offsetHeight;
+    menu.style.left = `${Math.min(x, vw - mw - 4)}px`;
+    menu.style.top = `${Math.min(y, vh - mh - 4)}px`;
+    ctxMenuEl = menu;
   }
 
   /* ── Window manager ─────────────────────────────────────────────────── */
@@ -209,6 +375,20 @@
     if (width) el.style.width = typeof width === 'number' ? `${width}px` : width;
     if (height) el.style.height = typeof height === 'number' ? `${height}px` : height;
 
+    // Resize handles (edges + corners)
+    ;['n', 's', 'e', 'w'].forEach((dir) => {
+      const h = document.createElement('div');
+      h.className = `win-resize ${dir}`;
+      h.dataset.dir = dir;
+      el.appendChild(h);
+    });
+    ;['ne', 'nw', 'se', 'sw'].forEach((dir) => {
+      const h = document.createElement('div');
+      h.className = `win-resize-corner ${dir}`;
+      h.dataset.dir = dir;
+      el.appendChild(h);
+    });
+
     $('#windows').appendChild(el);
 
     const task = document.createElement('button');
@@ -222,21 +402,42 @@
     });
     $('#taskTabs').appendChild(task);
 
-    const rec = { el, task, kind: id, state: {}, onClose: null };
+    const rec = { el, task, kind: id, state: {}, onClose: null, restore: null };
     windows.set(id, rec);
+
+    const toggleMax = () => {
+      if (el.classList.contains('maximized')) {
+        el.classList.remove('maximized');
+        if (rec.restore) {
+          el.style.left = rec.restore.left;
+          el.style.top = rec.restore.top;
+          el.style.width = rec.restore.width;
+          el.style.height = rec.restore.height;
+        }
+        $('.win-max', el).title = 'Maximize';
+      } else {
+        rec.restore = {
+          left: el.style.left,
+          top: el.style.top,
+          width: el.style.width || `${el.offsetWidth}px`,
+          height: el.style.height || `${el.offsetHeight}px`,
+        };
+        el.classList.add('maximized');
+        $('.win-max', el).title = 'Restore';
+      }
+    };
 
     $('.win-close', el).addEventListener('click', () => closeWin(id));
     $('.win-min', el).addEventListener('click', () => {
       el.classList.add('minimized');
       task.classList.remove('active');
     });
-    $('.win-max', el).addEventListener('click', () => {
-      el.classList.toggle('maximized');
-    });
+    $('.win-max', el).addEventListener('click', toggleMax);
     el.addEventListener('mousedown', () => focusWin(id));
-    $('.win-titlebar', el).addEventListener('dblclick', () => el.classList.toggle('maximized'));
+    $('.win-titlebar', el).addEventListener('dblclick', toggleMax);
 
     makeDraggable(el, $('.win-titlebar', el));
+    makeResizable(el);
     focusWin(id);
     return rec;
   }
@@ -254,10 +455,71 @@
     });
     bar.addEventListener('pointermove', (e) => {
       if (!dragging) return;
-      win.style.left = `${Math.max(0, ox + e.clientX - sx)}px`;
-      win.style.top = `${Math.max(0, oy + e.clientY - sy)}px`;
+      const desk = $('#windows');
+      const maxL = Math.max(0, (desk?.clientWidth || window.innerWidth) - 80);
+      const maxT = Math.max(0, (desk?.clientHeight || window.innerHeight) - 40);
+      win.style.left = `${Math.min(maxL, Math.max(0, ox + e.clientX - sx))}px`;
+      win.style.top = `${Math.min(maxT, Math.max(0, oy + e.clientY - sy))}px`;
     });
     bar.addEventListener('pointerup', () => { dragging = false; });
+  }
+
+  function makeResizable(win) {
+    const minW = 280;
+    const minH = 180;
+    win.querySelectorAll('.win-resize, .win-resize-corner').forEach((handle) => {
+      let sx, sy, ol, ot, ow, oh, resizing = false;
+      const dir = handle.dataset.dir || '';
+      handle.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        if (win.classList.contains('maximized')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        resizing = true;
+        sx = e.clientX; sy = e.clientY;
+        ol = win.offsetLeft; ot = win.offsetTop;
+        ow = win.offsetWidth; oh = win.offsetHeight;
+        handle.setPointerCapture(e.pointerId);
+        focusWin(win.dataset.win);
+      });
+      handle.addEventListener('pointermove', (e) => {
+        if (!resizing) return;
+        const dx = e.clientX - sx;
+        const dy = e.clientY - sy;
+        let left = ol, top = ot, width = ow, height = oh;
+        if (dir.includes('e')) width = Math.max(minW, ow + dx);
+        if (dir.includes('s')) height = Math.max(minH, oh + dy);
+        if (dir.includes('w')) {
+          width = Math.max(minW, ow - dx);
+          left = ol + (ow - width);
+        }
+        if (dir.includes('n')) {
+          height = Math.max(minH, oh - dy);
+          top = ot + (oh - height);
+        }
+        win.style.left = `${Math.max(0, left)}px`;
+        win.style.top = `${Math.max(0, top)}px`;
+        win.style.width = `${width}px`;
+        win.style.height = `${height}px`;
+      });
+      handle.addEventListener('pointerup', () => { resizing = false; });
+    });
+  }
+
+  function cycleWindows(backward) {
+    const ids = [...windows.keys()].filter((id) => {
+      const w = windows.get(id);
+      return w && !w.el.classList.contains('minimized');
+    });
+    if (!ids.length) return;
+    if (cycleIdx < 0 || cycleIdx >= ids.length) {
+      const active = ids.findIndex((id) => windows.get(id)?.el.classList.contains('active'));
+      cycleIdx = active >= 0 ? active : 0;
+    }
+    cycleIdx = backward
+      ? (cycleIdx - 1 + ids.length) % ids.length
+      : (cycleIdx + 1) % ids.length;
+    focusWin(ids[cycleIdx]);
   }
 
   /**
@@ -333,14 +595,16 @@
       calc: openCalc,
     };
     if (app.action && actions[app.action]) return actions[app.action]();
-    if (app.url) {
+    const openUrl = app.embed || app.url;
+    if (openUrl) {
       openWebApp({
         id: `app:${app.id}`,
         title: app.label || app.id,
         icon: app.icon || '🌐',
-        url: app.url,
-        externalUrl: app.url,
+        url: openUrl,
+        externalUrl: app.url || openUrl,
       });
+      return;
     }
   }
 
@@ -775,23 +1039,56 @@
       list.querySelectorAll('tr[data-path]').forEach((el) => bindEntryEl(el, data, true));
     };
 
+    const openEntry = (entry) => {
+      if (!entry) return;
+      if (entry.is_dir) {
+        state.view = 'folder';
+        state.path = entry.path;
+        load();
+      } else {
+        openPreview(state.root, entry.path, entry.name || 'File');
+      }
+    };
+
     const bindEntryEl = (el, data, isRow) => {
-      el.addEventListener('click', () => {
+      const select = () => {
         const list = $('[data-act="list"]', root);
         list.querySelectorAll('.selected').forEach((r) => r.classList.remove('selected'));
         el.classList.add('selected');
         state.selected = el.dataset.path;
         state.selectedEntry = (state.entries || []).find((x) => x.path === state.selected) || null;
         showDetailsEntry(state.selectedEntry);
-      });
+      };
+      el.addEventListener('click', select);
       el.addEventListener('dblclick', () => {
-        if (el.dataset.dir === '1') {
-          state.view = 'folder';
-          state.path = el.dataset.path;
-          load();
-        } else {
-          openPreview(state.root, el.dataset.path, state.selectedEntry?.name || 'File');
-        }
+        select();
+        openEntry(state.selectedEntry || {
+          path: el.dataset.path,
+          is_dir: el.dataset.dir === '1',
+          name: el.dataset.path?.split('/').pop(),
+        });
+      });
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        select();
+        const entry = state.selectedEntry;
+        const writable = !!data?.writable;
+        const items = [
+          { label: 'Open', action: () => openEntry(entry) },
+          { label: 'Preview', disabled: !entry || entry.is_dir, action: () => openPreview(state.root, entry.path, entry.name) },
+          { label: 'Download', disabled: !entry || entry.is_dir, action: () => {
+            const q = new URLSearchParams({ root: state.root, path: entry.path });
+            window.open(apiUrl(`api/files/download?${q}`), '_blank');
+          }},
+          { sep: true },
+          { label: 'Rename', disabled: !entry || !writable, action: () => $('[data-act="rename"]', root).click() },
+          { label: 'Delete', disabled: !entry || !writable, action: () => $('[data-act="delete"]', root).click() },
+          { sep: true },
+          { label: 'New folder', disabled: !writable, action: () => $('[data-act="newfolder"]', root).click() },
+          { label: 'Refresh', action: () => $('[data-act="refresh"]', root).click() },
+        ];
+        showContextMenu(e.clientX, e.clientY, items);
       });
     };
 
@@ -954,9 +1251,106 @@
       window.open(apiUrl(`api/files/download?${q}`), '_blank');
     };
 
+    $('[data-act="list"]', root).addEventListener('contextmenu', (e) => {
+      if (e.target.closest('tr[data-path], .exp-icon-item, .exp-drive')) return;
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'New folder', action: () => $('[data-act="newfolder"]', root).click() },
+        { label: 'Refresh', action: () => $('[data-act="refresh"]', root).click() },
+      ]);
+    });
+
     // start at This PC so network is obvious
     state.view = 'thispc';
     load();
+  }
+
+  function extOf(name) {
+    const n = String(name || '');
+    const i = n.lastIndexOf('.');
+    return i >= 0 ? n.slice(i + 1).toLowerCase() : '';
+  }
+
+  /** Minimal safe markdown → HTML (no raw HTML passthrough). */
+  function renderMarkdownSafe(src) {
+    const lines = String(src || '').replace(/\r\n/g, '\n').split('\n');
+    const out = [];
+    let inCode = false;
+    let codeLang = '';
+    let codeBuf = [];
+    let inUl = false;
+    let inOl = false;
+    let inBq = false;
+
+    const closeLists = () => {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      if (inBq) { out.push('</blockquote>'); inBq = false; }
+    };
+
+    const inline = (s) => {
+      let t = escapeHtml(s);
+      t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+      t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      t = t.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      return t;
+    };
+
+    for (const raw of lines) {
+      if (raw.startsWith('```')) {
+        if (inCode) {
+          out.push(`<pre><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`);
+          codeBuf = [];
+          inCode = false;
+          codeLang = '';
+        } else {
+          closeLists();
+          inCode = true;
+          codeLang = raw.slice(3).trim();
+        }
+        continue;
+      }
+      if (inCode) { codeBuf.push(raw); continue; }
+
+      if (/^\s*$/.test(raw)) { closeLists(); continue; }
+
+      const h = raw.match(/^(#{1,3})\s+(.*)$/);
+      if (h) {
+        closeLists();
+        const lvl = h[1].length;
+        out.push(`<h${lvl}>${inline(h[2])}</h${lvl}>`);
+        continue;
+      }
+      if (/^>\s?/.test(raw)) {
+        if (inUl) { out.push('</ul>'); inUl = false; }
+        if (inOl) { out.push('</ol>'); inOl = false; }
+        if (!inBq) { out.push('<blockquote>'); inBq = true; }
+        out.push(`<p>${inline(raw.replace(/^>\s?/, ''))}</p>`);
+        continue;
+      }
+      const ul = raw.match(/^\s*[-*]\s+(.*)$/);
+      if (ul) {
+        if (inOl) { out.push('</ol>'); inOl = false; }
+        if (inBq) { out.push('</blockquote>'); inBq = false; }
+        if (!inUl) { out.push('<ul>'); inUl = true; }
+        out.push(`<li>${inline(ul[1])}</li>`);
+        continue;
+      }
+      const ol = raw.match(/^\s*\d+\.\s+(.*)$/);
+      if (ol) {
+        if (inUl) { out.push('</ul>'); inUl = false; }
+        if (inBq) { out.push('</blockquote>'); inBq = false; }
+        if (!inOl) { out.push('<ol>'); inOl = true; }
+        out.push(`<li>${inline(ol[1])}</li>`);
+        continue;
+      }
+      closeLists();
+      out.push(`<p>${inline(raw)}</p>`);
+    }
+    if (inCode) out.push(`<pre><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`);
+    closeLists();
+    return out.join('\n');
   }
 
   async function openPreview(rootId, path, title) {
@@ -965,28 +1359,35 @@
       id,
       title: title || 'Preview',
       icon: '📄',
-      width: 680,
-      height: 500,
+      width: 720,
+      height: 540,
       bodyHtml: `<div class="preview"><div class="bar">Loading…</div><div class="preview-body"></div></div>`,
     });
     const body = $('.preview', rec.el);
     try {
       const q = new URLSearchParams({ root: rootId, path });
       const data = await api(`api/files/read?${q}`);
+      const name = data.name || title || path;
+      const ext = extOf(name);
+      const dl = `<a href="${apiUrl('api/files/download')}?${q}"><button type="button">Download</button></a>`;
       if (data.image && data.data_url) {
-        $('.bar', body).innerHTML = `
-          <span>${escapeHtml(data.name)} · ${fmtSize(data.size)}</span>
-          <a href="${apiUrl('api/files/download')}?${q}"><button type="button">Download</button></a>`;
-        $('.preview-body', body).innerHTML = `<div class="img-preview"><img src="${data.data_url}" alt="" /></div>`;
+        $('.bar', body).innerHTML = `<span>${escapeHtml(name)} · ${fmtSize(data.size)} · image</span>${dl}`;
+        $('.preview-body', body).innerHTML = `<div class="img-preview" data-act="imgwrap"><img src="${data.data_url}" alt="${escapeHtml(name)}" /></div>`;
+        const wrap = $('[data-act="imgwrap"]', body);
+        wrap?.addEventListener('click', () => wrap.classList.toggle('zoomed'));
       } else if (data.binary) {
-        $('.bar', body).innerHTML = `
-          <span>Binary · ${fmtSize(data.size)} · ${escapeHtml(data.mime || '')}</span>
-          <a href="${apiUrl('api/files/download')}?${q}"><button type="button">Download</button></a>`;
+        $('.bar', body).innerHTML = `<span>Binary · ${fmtSize(data.size)} · ${escapeHtml(data.mime || '')}</span>${dl}`;
         $('.preview-body', body).innerHTML = `<pre class="empty-pre">(binary — use Download)</pre>`;
+      } else if (ext === 'md' || ext === 'markdown') {
+        $('.bar', body).innerHTML = `<span>${escapeHtml(name)} · ${fmtSize(data.size)} · Markdown</span>${dl}`;
+        $('.preview-body', body).innerHTML = `<div class="preview-md"></div>`;
+        $('.preview-md', body).innerHTML = renderMarkdownSafe(data.content || '');
+      } else if (CODE_EXTS.has(ext) || (data.mime || '').includes('json') || (data.mime || '').includes('javascript')) {
+        $('.bar', body).innerHTML = `<span>${escapeHtml(name)} · ${fmtSize(data.size)} · code</span>${dl}`;
+        $('.preview-body', body).innerHTML = `<pre class="preview-code"></pre>`;
+        $('.preview-code', body).textContent = data.content || '';
       } else {
-        $('.bar', body).innerHTML = `
-          <span>${escapeHtml(data.name)} · ${fmtSize(data.size)}</span>
-          <a href="${apiUrl('api/files/download')}?${q}"><button type="button">Download</button></a>`;
+        $('.bar', body).innerHTML = `<span>${escapeHtml(name)} · ${fmtSize(data.size)}</span>${dl}`;
         $('.preview-body', body).innerHTML = `<pre></pre>`;
         $('pre', body).textContent = data.content || '';
       }
@@ -1148,27 +1549,46 @@
     await load();
   }
 
+  async function postControl(path, body) {
+    return api(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
   /* ── Docker ─────────────────────────────────────────────────────────── */
   async function openDocker() {
     const id = 'docker';
+    const canCtrl = !!(CFG.features?.docker_control);
     const rec = createWindow({
       id,
       title: 'Docker',
       icon: '🐳',
-      width: 820,
-      height: 500,
+      width: 900,
+      height: 520,
       bodyHtml: `
         <div class="app-shell">
           <div class="app-toolbar">
             <button type="button" data-act="refresh">↻ Refresh</button>
             <label class="chk"><input type="checkbox" data-act="live" checked /> Live</label>
             <span class="muted" data-act="count"></span>
+            <span class="ctrl-hint" data-act="hint">${canCtrl ? 'Controls enabled' : 'Controls disabled (allow_docker_control)'}</span>
           </div>
           <div class="table-wrap"><div class="empty">Loading…</div></div>
         </div>`,
     });
     const wrap = $('.table-wrap', rec.el);
     let timer = null;
+
+    const doCtrl = async (name, action) => {
+      if (!canCtrl) return;
+      if (!confirm(`${action} container "${name}"?`)) return;
+      try {
+        await postControl('api/docker/control', { name, action });
+        await load();
+      } catch (e) { alert(e.message); }
+    };
 
     const load = async () => {
       try {
@@ -1189,7 +1609,7 @@
         }
         wrap.innerHTML = `
           <table class="data-table">
-            <thead><tr><th>Name</th><th>State</th><th>Image</th><th>Status</th><th>Ports</th></tr></thead>
+            <thead><tr><th>Name</th><th>State</th><th>Image</th><th>Status</th><th>Ports</th><th>Control</th></tr></thead>
             <tbody>
               ${list.map((c) => `
                 <tr>
@@ -1198,10 +1618,20 @@
                   <td class="cmd-cell">${escapeHtml(c.image)}</td>
                   <td class="muted">${escapeHtml(c.status)}</td>
                   <td class="muted tiny">${escapeHtml(c.ports || '—')}</td>
+                  <td>
+                    <div class="ctrl-btns">
+                      <button type="button" data-c="${escapeHtml(c.name)}" data-a="start" ${canCtrl ? '' : 'disabled'} title="${canCtrl ? 'Start' : 'Disabled in config'}">Start</button>
+                      <button type="button" data-c="${escapeHtml(c.name)}" data-a="stop" ${canCtrl ? '' : 'disabled'} title="${canCtrl ? 'Stop' : 'Disabled in config'}">Stop</button>
+                      <button type="button" data-c="${escapeHtml(c.name)}" data-a="restart" ${canCtrl ? '' : 'disabled'} title="${canCtrl ? 'Restart' : 'Disabled in config'}">Restart</button>
+                    </div>
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
           </table>`;
+        wrap.querySelectorAll('.ctrl-btns button').forEach((btn) => {
+          btn.onclick = () => doCtrl(btn.dataset.c, btn.dataset.a);
+        });
       } catch (e) {
         wrap.innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`;
       }
@@ -1221,41 +1651,65 @@
   /* ── Services ───────────────────────────────────────────────────────── */
   async function openServices() {
     const id = 'services';
+    const canCtrl = !!(CFG.features?.service_control);
     const rec = createWindow({
       id,
       title: 'Services',
       icon: '🛠',
-      width: 700,
-      height: 480,
+      width: 820,
+      height: 500,
       bodyHtml: `
         <div class="app-shell">
           <div class="app-toolbar">
             <button type="button" data-act="refresh">↻</button>
-            <span class="muted">systemd · read-only</span>
+            <span class="muted">${canCtrl ? 'systemd · controls enabled' : 'systemd · read-only'}</span>
+            <span class="ctrl-hint">${canCtrl ? '' : 'Enable allow_service_control in config.json to start/stop/restart'}</span>
           </div>
           <div class="table-wrap"><div class="empty">Loading…</div></div>
         </div>`,
     });
     const wrap = $('.table-wrap', rec.el);
+
+    const doCtrl = async (unit, action) => {
+      if (!canCtrl) return;
+      if (!confirm(`${action} unit "${unit}"?`)) return;
+      try {
+        await postControl('api/services/control', { unit, action });
+        await load();
+      } catch (e) { alert(e.message); }
+    };
+
     const load = async () => {
       try {
         const data = await api('api/services');
         const list = data.services || [];
         wrap.innerHTML = `
           <table class="data-table">
-            <thead><tr><th>Unit</th><th>Active</th><th>Sub</th><th>Enabled</th><th>Description</th></tr></thead>
+            <thead><tr><th>Unit</th><th>Active</th><th>Sub</th><th>Enabled</th><th>Description</th><th>Control</th></tr></thead>
             <tbody>
-              ${list.map((s) => `
+              ${list.map((s) => {
+                const bare = s.unit.replace(/\.service$/, '');
+                return `
                 <tr>
-                  <td><strong>${escapeHtml(s.unit.replace(/\.service$/, ''))}</strong></td>
+                  <td><strong>${escapeHtml(bare)}</strong></td>
                   <td>${stateBadge(s.active)}</td>
                   <td class="muted">${escapeHtml(s.sub)}</td>
                   <td class="muted">${escapeHtml(s.enabled || '—')}</td>
                   <td class="cmd-cell">${escapeHtml(s.description)}</td>
-                </tr>
-              `).join('')}
+                  <td>
+                    <div class="ctrl-btns">
+                      <button type="button" data-u="${escapeHtml(s.unit)}" data-a="start" ${canCtrl ? '' : 'disabled'}>Start</button>
+                      <button type="button" data-u="${escapeHtml(s.unit)}" data-a="stop" ${canCtrl ? '' : 'disabled'}>Stop</button>
+                      <button type="button" data-u="${escapeHtml(s.unit)}" data-a="restart" ${canCtrl ? '' : 'disabled'}>Restart</button>
+                    </div>
+                  </td>
+                </tr>`;
+              }).join('')}
             </tbody>
           </table>`;
+        wrap.querySelectorAll('.ctrl-btns button').forEach((btn) => {
+          btn.onclick = () => doCtrl(btn.dataset.u, btn.dataset.a);
+        });
       } catch (e) {
         wrap.innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`;
       }
@@ -1705,6 +2159,8 @@
             <li>Docker: ${CFG.features?.docker ? '✓' : '—'}</li>
             <li>Journal: ${CFG.features?.journal ? '✓' : '—'}</li>
             <li>systemctl: ${CFG.features?.systemctl ? '✓' : '—'}</li>
+            <li>Service control: ${CFG.features?.service_control ? '✓ enabled' : '— off'}</li>
+            <li>Docker control: ${CFG.features?.docker_control ? '✓ enabled' : '— off'}</li>
           </ul>
           <h3 style="margin-top:14px;font-size:13px;">Mounted places</h3>
           <ul>
@@ -1761,9 +2217,23 @@
     });
     document.addEventListener('click', (e) => {
       if (!e.target.closest('#startMenu') && !e.target.closest('#startBtn')) closeStart();
+      if (!e.target.closest('.ctx-menu')) closeContextMenu();
+    });
+    document.addEventListener('contextmenu', (e) => {
+      // desktop empty area: no browser menu noise for icons only; leave default elsewhere
+      if (e.target.closest('.desk-icon, .explorer, .ctx-menu')) return;
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeStart();
+      if (e.key === 'Escape') {
+        closeStart();
+        closeContextMenu();
+        return;
+      }
+      // Cycle windows: Ctrl+Tab / Ctrl+Shift+Tab
+      if (e.ctrlKey && e.key === 'Tab') {
+        e.preventDefault();
+        cycleWindows(e.shiftKey);
+      }
     });
 
     setTimeout(bootDone, 500);

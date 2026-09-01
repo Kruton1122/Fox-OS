@@ -21,6 +21,8 @@
   "services_auto": true,
   "discover_desktop_apps": true,
   "discover_docker": true,
+  "allow_service_control": false,
+  "allow_docker_control": false,
   "apps": [],
   "links": [
     {

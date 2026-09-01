@@ -18,7 +18,7 @@ from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
-VERSION = "3.0.1"
+VERSION = "3.1.0"
 
 NETWORK_FS = frozenset({
     "cifs", "smb3", "smb2", "nfs", "nfs4", "fuse.sshfs", "fuse.rclone",
@@ -58,6 +58,8 @@ def _default_config() -> dict:
         "services_auto": True,
         "discover_desktop_apps": True,
         "discover_docker": True,
+        "allow_service_control": False,
+        "allow_docker_control": False,
         "apps": [],
         "links": [],
         "quick_access": [],
@@ -589,6 +591,8 @@ def api_config():
             "journal": shutil.which("journalctl") is not None,
             "systemctl": shutil.which("systemctl") is not None,
             "desktop_apps": CFG.get("discover_desktop_apps", True),
+            "service_control": bool(CFG.get("allow_service_control", False)),
+            "docker_control": bool(CFG.get("allow_docker_control", False)),
         },
     })
 
@@ -992,7 +996,10 @@ def api_services():
             info["active"] = "not-found"
         rows.append(info)
 
-    return jsonify({"services": rows})
+    return jsonify({
+        "services": rows,
+        "can_control": bool(CFG.get("allow_service_control", False)),
+    })
 
 
 @app.get("/api/docker")
@@ -1021,7 +1028,123 @@ def api_docker():
         })
     # sort running first
     containers.sort(key=lambda c: (0 if c["state"] == "running" else 1, c["name"].lower()))
-    return jsonify({"available": True, "containers": containers, "count": len(containers)})
+    return jsonify({
+        "available": True,
+        "containers": containers,
+        "count": len(containers),
+        "can_control": bool(CFG.get("allow_docker_control", False)),
+    })
+
+
+def _normalize_unit(name: str) -> str:
+    """Normalize a systemd unit name; empty if unsafe."""
+    unit = (name or "").strip()
+    if not unit:
+        return ""
+    if not all(c.isalnum() or c in ".-_@" for c in unit):
+        return ""
+    if not unit.endswith(".service") and not unit.endswith(".timer") and not unit.endswith(".socket"):
+        unit = f"{unit}.service"
+    return unit
+
+
+def _allowed_service_units() -> set[str]:
+    """Allowlist: config.services + currently discoverable running units (same as GET list)."""
+    units: list[str] = list(CFG.get("services") or [])
+    if CFG.get("services_auto", True) or not units:
+        for u in discover_running_services(limit=80):
+            if u not in units:
+                units.append(u)
+    if not units:
+        units = ["ssh", "cron", "docker", "nginx", "foxos"]
+    out: set[str] = set()
+    for u in units:
+        n = _normalize_unit(u)
+        if n:
+            out.add(n)
+            # also accept bare name without .service
+            if n.endswith(".service"):
+                out.add(n[:-8])
+    return out
+
+
+def _allowed_docker_names() -> set[str]:
+    """Allowlist: names from docker ps -a only."""
+    if not shutil.which("docker"):
+        return set()
+    code, out, _ = _run(
+        ["docker", "ps", "-a", "--format", "{{.Names}}"],
+        timeout=10,
+    )
+    if code != 0:
+        return set()
+    names: set[str] = set()
+    for line in out.splitlines():
+        name = line.strip()
+        if name and all(c.isalnum() or c in "._-" for c in name):
+            names.add(name)
+    return names
+
+
+@app.post("/api/services/control")
+def api_services_control():
+    """Start/stop/restart a systemd unit — allowlisted, fixed argv only."""
+    if not CFG.get("allow_service_control", False):
+        return jsonify({"error": "service control disabled (set allow_service_control in config)"}), 403
+    if not shutil.which("systemctl"):
+        return jsonify({"error": "systemctl not available"}), 501
+    body = request.get_json(force=True, silent=True) or {}
+    action = str(body.get("action") or "").strip().lower()
+    if action not in ("start", "stop", "restart"):
+        return jsonify({"error": "action must be start, stop, or restart"}), 400
+    unit = _normalize_unit(str(body.get("unit") or body.get("name") or ""))
+    if not unit:
+        return jsonify({"error": "invalid unit name"}), 400
+    allowed = _allowed_service_units()
+    bare = unit[:-8] if unit.endswith(".service") else unit
+    if unit not in allowed and bare not in allowed:
+        return jsonify({"error": "unit not in allowlist"}), 403
+    # Fixed argv — never shell=True, never client-supplied command strings
+    code, out, err = _run(["systemctl", action, unit], timeout=30)
+    ok = code == 0
+    return jsonify({
+        "ok": ok,
+        "action": action,
+        "unit": unit,
+        "code": code,
+        "stdout": (out or "").strip()[-2000:],
+        "stderr": (err or "").strip()[-2000:],
+        "error": None if ok else ((err or out or "systemctl failed").strip()[:500]),
+    }), (200 if ok else 500)
+
+
+@app.post("/api/docker/control")
+def api_docker_control():
+    """Start/stop/restart a Docker container — allowlisted names, fixed argv only."""
+    if not CFG.get("allow_docker_control", False):
+        return jsonify({"error": "docker control disabled (set allow_docker_control in config)"}), 403
+    if not shutil.which("docker"):
+        return jsonify({"error": "docker not installed"}), 501
+    body = request.get_json(force=True, silent=True) or {}
+    action = str(body.get("action") or "").strip().lower()
+    if action not in ("start", "stop", "restart"):
+        return jsonify({"error": "action must be start, stop, or restart"}), 400
+    name = str(body.get("name") or body.get("container") or "").strip()
+    if not name or not all(c.isalnum() or c in "._-" for c in name):
+        return jsonify({"error": "invalid container name"}), 400
+    if name not in _allowed_docker_names():
+        return jsonify({"error": "container not in allowlist"}), 403
+    code, out, err = _run(["docker", action, name], timeout=60)
+    ok = code == 0
+    return jsonify({
+        "ok": ok,
+        "action": action,
+        "name": name,
+        "code": code,
+        "stdout": (out or "").strip()[-2000:],
+        "stderr": (err or "").strip()[-2000:],
+        "error": None if ok else ((err or out or "docker failed").strip()[:500]),
+    }), (200 if ok else 500)
 
 
 @app.get("/api/logs")

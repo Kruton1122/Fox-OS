@@ -12,18 +12,19 @@ Inspired by Cockpit, CasaOS, and classic File Explorer.
 
 | App | Description |
 |-----|-------------|
-| **File Explorer** | Windows-style browser with This PC / Network, multi-root jails |
+| **File Explorer** | Windows-style browser with This PC / Network, multi-root jails, folder filter, context menus |
 | **System** | Live CPU %, RAM, swap, load, temp (if available), disks |
 | **Programs** | FreeDesktop `.desktop` apps, PATH tools, Docker containers, config links |
 | **Processes** | Top processes by memory |
-| **Docker** | Container list (read-only) when Docker is installed |
-| **Services** | systemd unit status (config list and/or auto-discovered) |
+| **Docker** | Container list; optional start/stop/restart when enabled |
+| **Services** | systemd unit status; optional start/stop/restart when enabled |
 | **Network** | Interfaces, addresses, listening ports |
 | **Logs** | `journalctl` tail by unit |
 | **Launcher** | Bookmark tiles from config |
 | **Notes / Calculator** | Desktop utilities |
+| **Desktop chrome** | Resizable windows, maximize/restore, Ctrl+Tab cycle, tray meters, sticky icon positions |
 
-Safety first: path jail under configured roots, optional writes, **no arbitrary command execution** from the web UI.
+Safety first: path jail under configured roots, optional writes, **no arbitrary command execution** from the web UI. Service/Docker controls (when enabled) use fixed argv + strict allowlists only.
 
 ## Requirements
 
@@ -69,9 +70,11 @@ Copy from `config.example.json`. Important keys:
 | `roots` | Places File Explorer can browse (`path` supports `~`) |
 | `write_roots` | Which root ids allow upload/mkdir/delete |
 | `links` | Launcher / Programs bookmarks (`url`, `icon`, `group`) |
-| `apps` | Extra desktop icons (or override builtins by `id`) |
+| `apps` | Extra desktop icons (or override builtins by `id`) — see below |
 | `services` | systemd unit names to always show |
 | `services_auto` | Also list running units (default `true`) |
+| `allow_service_control` | Allow web UI start/stop/restart of allowlisted units (default **`false`**) |
+| `allow_docker_control` | Allow web UI start/stop/restart of containers from `docker ps` (default **`false`**) |
 | `discover_desktop_apps` | Scan `/usr/share/applications` etc. (default `true`) |
 | `discover_docker` | Include `docker ps` in Programs (default `true`) |
 | `embed_map` | Optional: map hostnames → `/embed/<key>/` for same-origin iframes |
@@ -97,6 +100,38 @@ Copy from `config.example.json`. Important keys:
 ]
 ```
 
+### Apps extension (light hook)
+
+`apps` merges with builtins by `id`. Each entry can:
+
+| Field | Effect |
+|-------|--------|
+| `action` | Open a built-in app id (`files`, `system`, `docker`, …) |
+| `url` | Open inside a Fox OS window (iframe). Prefer same-origin `/embed/...` or a host listed in `embed_map` |
+| `embed` | Alias for `url` when you want an explicit embed target |
+| `label` / `icon` / `desc` | Desktop + Start menu chrome |
+
+```json
+"apps": [
+  { "id": "files", "label": "My Files" },
+  {
+    "id": "grafana-desk",
+    "label": "Grafana",
+    "icon": "📈",
+    "desc": "Metrics",
+    "url": "https://grafana.example.com/"
+  },
+  {
+    "id": "status-embed",
+    "label": "Status",
+    "icon": "📡",
+    "embed": "/embed/status/"
+  }
+]
+```
+
+There is no plugin runtime — just config-driven icons that open builtins or embed URLs.
+
 ## Programs discovery
 
 `GET /api/programs` returns:
@@ -108,6 +143,29 @@ Copy from `config.example.json`. Important keys:
 
 This is intentionally inventory-oriented: listing is safe from a browser; running arbitrary binaries over HTTP is not.
 
+## Service & Docker controls (opt-in)
+
+Disabled by default. When enabled:
+
+- **Services:** `POST /api/services/control` with `{ "action": "start"|"stop"|"restart", "unit": "nginx" }`
+- **Docker:** `POST /api/docker/control` with `{ "action": "start"|"stop"|"restart", "name": "mycontainer" }`
+
+Rules:
+
+- Only units from `config.services` plus the discovered running list (same inventory as GET)
+- Only container **names** currently returned by `docker ps -a`
+- Fixed argv only (`systemctl start UNIT`, `docker restart NAME`) — never `shell=True`, never client-supplied command strings
+- UI shows confirm dialogs; buttons stay disabled with a muted hint when flags are false
+
+Enable in your private `config.json` (not committed):
+
+```json
+"allow_service_control": true,
+"allow_docker_control": true
+```
+
+Restart Fox OS after changing these flags. Prefer reverse-proxy auth before turning controls on.
+
 ## API sketch
 
 | Endpoint | Notes |
@@ -118,7 +176,9 @@ This is intentionally inventory-oriented: listing is safe from a browser; runnin
 | `/api/programs` | Installed / discovered software |
 | `/api/processes` | Process table |
 | `/api/services` | systemd |
+| `/api/services/control` | POST start/stop/restart (opt-in) |
 | `/api/docker` | containers |
+| `/api/docker/control` | POST start/stop/restart (opt-in) |
 | `/api/network` | interfaces / listeners |
 | `/api/logs` | journalctl |
 | `/api/files*` | jails file browser |
@@ -139,8 +199,10 @@ cp static/wallpaper.default.svg static/wallpaper.png   # or use your own PNG/JPG
 
 - Prefer `host: 127.0.0.1` + reverse proxy + auth (Authelia, Basic Auth, VPN, …)
 - Limit `write_roots`
-- Do not expose write-enabled Fox OS to the public internet without auth
+- Keep `allow_service_control` / `allow_docker_control` **false** unless you trust every browser client that can reach Fox OS
+- Do not expose write-enabled (or control-enabled) Fox OS to the public internet without auth
 - File APIs reject path traversal outside configured roots
+- Control APIs reject unknown units/containers and never run arbitrary shell
 
 ## Reverse proxy (nginx sketch)
 
