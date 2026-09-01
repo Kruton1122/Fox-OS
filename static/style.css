@@ -265,7 +265,7 @@ html, body {
 .start-menu {
   position: absolute; z-index: 120;
   left: 4px; bottom: 42px;
-  width: min(300px, 92vw);
+  width: min(320px, 92vw);
   display: flex;
   background: var(--panel);
   border: 2px solid;
@@ -283,7 +283,19 @@ html, body {
   padding: 12px 0;
 }
 .start-side span { color: var(--fox2); }
-.start-items { flex: 1; padding: 4px; max-height: min(420px, 70vh); overflow: auto; }
+.start-main { flex: 1; display: flex; flex-direction: column; min-width: 0; max-height: min(460px, 75vh); }
+.start-search-wrap { padding: 6px 6px 2px; border-bottom: 1px solid var(--panel-lo); }
+.start-search {
+  width: 100%; box-sizing: border-box;
+  font: inherit; font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid;
+  border-color: var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo);
+  background: #fff;
+}
+.start-search:focus { outline: 1px dotted var(--title); outline-offset: 1px; }
+.start-items { flex: 1; padding: 4px; overflow: auto; }
+.start-empty { padding: 14px 10px; font-size: 12px; opacity: .8; }
 .start-item {
   width: 100%; display: flex; align-items: center; gap: 10px;
   padding: 7px 10px; border: 0; background: transparent;
@@ -849,7 +861,7 @@ html, body {
   .desk-icon { width: 72px; }
   .win { width: 96vw; height: 72vh; left: 2vw !important; top: 4vh !important; }
   .tray-host, .tray-stat { display: none; }
-  .start-menu { width: min(300px, 96vw); }
+  .start-menu { width: min(320px, 96vw); }
   .desk-widgets { display: none; }
   .exp-sidebar { width: 140px; }
   .exp-details { display: none; }
@@ -1017,3 +1029,30 @@ html, body {
 @media (max-width: 720px) {
   .trayTemp, #trayTemp, #trayDisk { display: none; }
 }
+
+/* Window snap */
+.snap-guide {
+  position: absolute; z-index: 90; pointer-events: none;
+  border: 2px dashed var(--fox2);
+  background: rgba(26, 58, 92, 0.22);
+  box-sizing: border-box;
+}
+.snap-guide.hidden { display: none; }
+.win.snapped-left, .win.snapped-right {
+  /* geometry set inline; keep chrome consistent with maximize */
+}
+.win.snapped-left .win-resize,
+.win.snapped-left .win-resize-corner,
+.win.snapped-right .win-resize,
+.win.snapped-right .win-resize-corner { display: none !important; }
+
+.ctx-item.ctx-danger { color: #8b0000; }
+.ctx-item.ctx-danger:hover, .ctx-item.ctx-danger:focus-visible {
+  background: #8b0000; color: #fff;
+}
+
+/* Recycle Bin */
+.trash-app { height: 100%; }
+.trash-body { flex: 1; min-height: 0; overflow: auto; background: #fff; }
+.trash-table td code { font-size: 11px; }
+

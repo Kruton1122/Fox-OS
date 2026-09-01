@@ -12,13 +12,14 @@ import shutil
 import socket
 import subprocess
 import threading
+import uuid
 import time
 from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
-VERSION = "3.1.0"
+VERSION = "3.1.1"
 
 NETWORK_FS = frozenset({
     "cifs", "smb3", "smb2", "nfs", "nfs4", "fuse.sshfs", "fuse.rclone",
@@ -31,6 +32,9 @@ EXAMPLE_CONFIG = ROOT / "config.example.json"
 STATIC = ROOT / "static"
 DATA = ROOT / "data"
 NOTES_PATH = DATA / "notes.json"
+TRASH_DIR = DATA / "trash"
+TRASH_FILES = TRASH_DIR / "files"
+TRASH_MANIFEST = TRASH_DIR / "manifest.json"
 
 app = Flask(__name__, static_folder=str(STATIC), static_url_path="/static")
 
@@ -66,6 +70,11 @@ def _default_config() -> dict:
         "embed_map": {},
         # Upload size cap for /api/files/upload (megabytes). 0 = unlimited (not recommended).
         "max_upload_mb": 512,
+        # Soft-delete to data/trash (Explorer Recycle Bin). permanent=true still hard-deletes.
+        "trash_enabled": True,
+        "trash_max_items": 200,
+        "trash_max_mb": 1024,
+        "trash_max_age_days": 30,
     }
 
 
@@ -89,6 +98,8 @@ def load_config() -> dict:
 
 CFG = load_config()
 DATA.mkdir(parents=True, exist_ok=True)
+TRASH_DIR.mkdir(parents=True, exist_ok=True)
+TRASH_FILES.mkdir(parents=True, exist_ok=True)
 
 # Upload size cap (Flask/Werkzeug reject oversized bodies before handler runs)
 _max_mb = CFG.get("max_upload_mb", 512)
@@ -102,6 +113,8 @@ if _max_mb_f and _max_mb_f > 0:
 # Discovered network mounts (id -> Path), merged into roots_map at request time
 _EPHEMERAL: dict[str, Path] = {}
 _EPHEMERAL_LOCK = threading.Lock()
+
+_TRASH_LOCK = threading.Lock()
 
 # CPU % sample state (threaded request workers)
 _cpu_prev: tuple[float, float] | None = None  # (idle, total)
@@ -411,6 +424,7 @@ def _builtin_apps() -> list[dict]:
     """Core desktop apps always available (portable)."""
     return [
         {"id": "files", "label": "File Explorer", "action": "files", "icon": "📁", "desc": "Browse disks & shares"},
+        {"id": "trash", "label": "Recycle Bin", "action": "trash", "icon": "🗑", "desc": "Restore or empty deleted files"},
         {"id": "system", "label": "System", "action": "system", "icon": "🖥", "desc": "CPU, RAM, disks — live"},
         {"id": "programs", "label": "Programs", "action": "programs", "icon": "📦", "desc": "Installed apps & tools"},
         {"id": "processes", "label": "Processes", "action": "processes", "icon": "⚙", "desc": "What's running"},
@@ -556,6 +570,235 @@ def discover_running_services(limit: int = 40) -> list[str]:
     return units
 
 
+
+def trash_enabled() -> bool:
+    return bool(CFG.get("trash_enabled", True))
+
+
+def _trash_max_items() -> int:
+    try:
+        n = int(CFG.get("trash_max_items", 200) or 200)
+    except (TypeError, ValueError):
+        n = 200
+    return max(1, n)
+
+
+def _trash_max_bytes() -> int:
+    try:
+        mb = float(CFG.get("trash_max_mb", 1024) or 1024)
+    except (TypeError, ValueError):
+        mb = 1024.0
+    if mb <= 0:
+        return 0  # unlimited
+    return int(mb * 1024 * 1024)
+
+
+def _trash_max_age_seconds() -> int:
+    try:
+        days = float(CFG.get("trash_max_age_days", 30) or 30)
+    except (TypeError, ValueError):
+        days = 30.0
+    if days <= 0:
+        return 0  # unlimited
+    return int(days * 86400)
+
+
+def _path_size(path: Path) -> int:
+    """Total size of a file or directory tree (best-effort)."""
+    try:
+        if path.is_file():
+            return int(path.stat().st_size)
+    except OSError:
+        return 0
+    total = 0
+    try:
+        for p in path.rglob("*"):
+            try:
+                if p.is_file():
+                    total += int(p.stat().st_size)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return total
+
+
+def _load_trash_manifest() -> list[dict]:
+    if not TRASH_MANIFEST.is_file():
+        return []
+    try:
+        data = json.loads(TRASH_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        return [x for x in data["items"] if isinstance(x, dict) and x.get("id")]
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict) and x.get("id")]
+    return []
+
+
+def _save_trash_manifest(items: list[dict]) -> None:
+    TRASH_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {"version": 1, "items": items}
+    tmp = TRASH_MANIFEST.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(TRASH_MANIFEST)
+
+
+def _trash_store_path(store_name: str) -> Path:
+    name = Path(store_name or "").name
+    if not name or name in (".", ".."):
+        raise ValueError("bad trash id")
+    target = (TRASH_FILES / name).resolve()
+    try:
+        target.relative_to(TRASH_FILES.resolve())
+    except ValueError as e:
+        raise ValueError("outside trash") from e
+    return target
+
+
+def _purge_trash_store(store_name: str) -> None:
+    try:
+        path = _trash_store_path(store_name)
+    except ValueError:
+        return
+    if not path.exists():
+        return
+    try:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _public_trash_item(it: dict) -> dict:
+    """Normalize manifest row for API clients."""
+    return {
+        "id": it.get("id"),
+        "original_root": it.get("original_root"),
+        "path": it.get("original_path") or it.get("path") or "",
+        "name": it.get("name") or "",
+        "deleted_at": int(it.get("deleted_at") or 0),
+        "deleted_iso": it.get("deleted_iso") or "",
+        "size": int(it.get("size") or 0),
+        "is_dir": bool(it.get("is_dir")),
+    }
+
+
+def _enforce_trash_caps(items: list[dict]) -> list[dict]:
+    """Drop expired/oldest trash entries until under age/item/size caps."""
+    max_items = _trash_max_items()
+    max_bytes = _trash_max_bytes()
+    max_age = _trash_max_age_seconds()
+    now = time.time()
+    items = sorted(items, key=lambda x: int(x.get("deleted_at") or 0))
+    if max_age > 0:
+        kept = []
+        for it in items:
+            age = now - int(it.get("deleted_at") or 0)
+            if age > max_age:
+                _purge_trash_store(str(it.get("store_name") or ""))
+            else:
+                kept.append(it)
+        items = kept
+    while len(items) > max_items:
+        old = items.pop(0)
+        _purge_trash_store(str(old.get("store_name") or ""))
+    if max_bytes > 0:
+        def total() -> int:
+            return sum(int(x.get("size") or 0) for x in items)
+        while items and total() > max_bytes:
+            old = items.pop(0)
+            _purge_trash_store(str(old.get("store_name") or ""))
+    return items
+
+
+def soft_delete_to_trash(root_id: str, rel: str) -> dict:
+    """Move a jailed path into data/trash and record manifest entry."""
+    if not rel:
+        raise ValueError("cannot delete root")
+    if not write_allowed(root_id):
+        raise PermissionError("read-only root")
+    path = resolve_safe(root_id, rel)
+    base = roots_map()[root_id]
+    if path == base:
+        raise ValueError("cannot delete root")
+    if not path.exists():
+        raise FileNotFoundError("not found")
+
+    try:
+        path.resolve().relative_to(base.resolve())
+    except ValueError as e:
+        raise ValueError("outside root") from e
+
+    with _TRASH_LOCK:
+        TRASH_FILES.mkdir(parents=True, exist_ok=True)
+        item_id = uuid.uuid4().hex
+        store_name = item_id
+        dest = TRASH_FILES / store_name
+        size = _path_size(path)
+        is_dir = path.is_dir()
+        name = path.name
+        now = time.time()
+        try:
+            shutil.move(str(path), str(dest))
+        except OSError as e:
+            raise OSError(str(e)) from e
+
+        entry = {
+            "id": item_id,
+            "store_name": store_name,
+            "original_root": root_id,
+            "original_path": rel.replace("\\", "/"),
+            "name": name,
+            "is_dir": is_dir,
+            "size": size,
+            "deleted_at": int(now),
+            "deleted_iso": datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M"),
+        }
+        items = _load_trash_manifest()
+        items.append(entry)
+        items = _enforce_trash_caps(items)
+        _save_trash_manifest(items)
+        return _public_trash_item(entry)
+
+
+def hard_delete_path(root_id: str, rel: str) -> None:
+    if not rel:
+        raise ValueError("cannot delete root")
+    if not write_allowed(root_id):
+        raise PermissionError("read-only root")
+    path = resolve_safe(root_id, rel)
+    if path == roots_map()[root_id]:
+        raise ValueError("cannot delete root")
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _unique_restore_dest(parent: Path, base: Path, preferred: Path) -> Path:
+    """Pick preferred path, or name (1).ext / name (2).ext on collision."""
+    if not preferred.exists():
+        return preferred
+    stem = preferred.stem
+    suffix = preferred.suffix
+    n = 1
+    while n < 1000:
+        cand = preferred.with_name(f"{stem} ({n}){suffix}")
+        try:
+            cand.resolve().relative_to(base.resolve())
+        except ValueError as e:
+            raise ValueError("outside root") from e
+        if not cand.exists():
+            return cand
+        n += 1
+    raise ValueError("could not find free restore name")
+
+
+
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True, "name": "Fox OS", "ts": time.time(), "version": VERSION})
@@ -593,6 +836,7 @@ def api_config():
             "desktop_apps": CFG.get("discover_desktop_apps", True),
             "service_control": bool(CFG.get("allow_service_control", False)),
             "docker_control": bool(CFG.get("allow_docker_control", False)),
+            "trash": trash_enabled(),
         },
     })
 
@@ -1377,27 +1621,161 @@ def api_rename():
 
 @app.post("/api/files/delete")
 def api_delete():
+    """Delete a file/folder. Soft-deletes to trash by default when enabled.
+    Pass permanent=true (or trash_enabled=false) for hard delete.
+    """
     body = request.get_json(force=True, silent=True) or {}
     root_id = body.get("root") or CFG.get("default_root", "home")
     rel = body.get("path") or ""
+    permanent = bool(body.get("permanent"))
     if not rel:
         return jsonify({"error": "cannot delete root"}), 400
     if not write_allowed(root_id):
         return jsonify({"error": "read-only root"}), 403
     try:
-        path = resolve_safe(root_id, rel)
+        if permanent or not trash_enabled():
+            hard_delete_path(root_id, rel)
+            return jsonify({"ok": True, "trashed": False})
+        entry = soft_delete_to_trash(root_id, rel)
+        return jsonify({"ok": True, "trashed": True, "item": entry})
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    if path == roots_map()[root_id]:
-        return jsonify({"error": "cannot delete root"}), 400
-    try:
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
     except OSError as e:
         return jsonify({"error": str(e)}), 500
-    return jsonify({"ok": True})
+
+
+@app.get("/api/trash")
+def api_trash_list():
+    if not trash_enabled():
+        return jsonify({"enabled": False, "items": [], "count": 0, "total_size": 0})
+    with _TRASH_LOCK:
+        items = _load_trash_manifest()
+        clean = []
+        for it in items:
+            try:
+                store = _trash_store_path(str(it.get("store_name") or it.get("id") or ""))
+            except ValueError:
+                continue
+            if store.exists():
+                clean.append(it)
+        clean = _enforce_trash_caps(clean)
+        if clean != items:
+            _save_trash_manifest(clean)
+        total = sum(int(x.get("size") or 0) for x in clean)
+        clean_sorted = sorted(clean, key=lambda x: int(x.get("deleted_at") or 0), reverse=True)
+        return jsonify({
+            "enabled": True,
+            "items": [_public_trash_item(x) for x in clean_sorted],
+            "count": len(clean_sorted),
+            "total_size": total,
+            "max_items": _trash_max_items(),
+            "max_mb": CFG.get("trash_max_mb", 1024),
+            "max_age_days": CFG.get("trash_max_age_days", 30),
+        })
+
+
+@app.post("/api/trash/restore")
+def api_trash_restore():
+    if not trash_enabled():
+        return jsonify({"error": "trash disabled"}), 400
+    body = request.get_json(force=True, silent=True) or {}
+    item_id = (body.get("id") or "").strip()
+    if not item_id:
+        return jsonify({"error": "id required"}), 400
+    with _TRASH_LOCK:
+        items = _load_trash_manifest()
+        entry = next((x for x in items if x.get("id") == item_id), None)
+        if not entry:
+            return jsonify({"error": "not found"}), 404
+        root_id = entry.get("original_root") or ""
+        rel = entry.get("original_path") or ""
+        if not write_allowed(root_id):
+            return jsonify({"error": "read-only root"}), 403
+        try:
+            store = _trash_store_path(str(entry.get("store_name") or item_id))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        if not store.exists():
+            items = [x for x in items if x.get("id") != item_id]
+            _save_trash_manifest(items)
+            return jsonify({"error": "trash payload missing"}), 404
+        try:
+            preferred = resolve_safe(root_id, rel)
+            parent_rel = str(Path(rel).parent).replace("\\", "/")
+            if parent_rel in (".", ""):
+                parent = roots_map()[root_id]
+            else:
+                parent = resolve_safe(root_id, parent_rel)
+            base = roots_map()[root_id]
+            dest = _unique_restore_dest(parent, base, preferred)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        if not parent.is_dir():
+            return jsonify({"error": "original folder missing — recreate it or delete permanently"}), 409
+        try:
+            shutil.move(str(store), str(dest))
+        except OSError as e:
+            return jsonify({"error": str(e)}), 500
+        items = [x for x in items if x.get("id") != item_id]
+        _save_trash_manifest(items)
+        out_rel = str(dest.relative_to(base)).replace("\\", "/")
+        renamed = out_rel != rel.replace("\\", "/")
+        return jsonify({
+            "ok": True,
+            "root": root_id,
+            "path": out_rel,
+            "renamed": renamed,
+            "name": dest.name,
+        })
+
+
+@app.post("/api/trash/delete")
+def api_trash_delete():
+    """Permanently delete one trash item."""
+    if not trash_enabled():
+        return jsonify({"error": "trash disabled"}), 400
+    body = request.get_json(force=True, silent=True) or {}
+    item_id = (body.get("id") or "").strip()
+    if not item_id:
+        return jsonify({"error": "id required"}), 400
+    with _TRASH_LOCK:
+        items = _load_trash_manifest()
+        entry = next((x for x in items if x.get("id") == item_id), None)
+        if not entry:
+            return jsonify({"error": "not found"}), 404
+        _purge_trash_store(str(entry.get("store_name") or item_id))
+        items = [x for x in items if x.get("id") != item_id]
+        _save_trash_manifest(items)
+        return jsonify({"ok": True})
+
+
+@app.post("/api/trash/empty")
+def api_trash_empty():
+    """Permanently delete all trash items."""
+    if not trash_enabled():
+        return jsonify({"error": "trash disabled"}), 400
+    with _TRASH_LOCK:
+        items = _load_trash_manifest()
+        for entry in items:
+            _purge_trash_store(str(entry.get("store_name") or entry.get("id") or ""))
+        _save_trash_manifest([])
+        try:
+            for child in TRASH_FILES.iterdir():
+                try:
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        return jsonify({"ok": True, "removed": len(items)})
+
 
 
 @app.post("/api/files/upload")

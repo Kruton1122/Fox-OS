@@ -4,6 +4,20 @@ All notable changes to Fox OS are documented here.
 
 Format inspired by [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
+## [3.1.1] — 2026-09-01
+
+Desktop polish: Recycle Bin, Start menu search, window snap.
+
+### Added
+
+- **Recycle Bin / Trash** — Explorer soft-deletes into `data/trash/` with a JSON manifest (`id`, original root/path, name, deleted_at, size, is_dir). Soft delete still requires `write_allowed` for that root. Caps via `trash_max_mb` (default 1024), `trash_max_age_days` (default 30), and `trash_max_items` (default 200). Permanent delete via context menu / Shift+Delete with confirm. New Recycle Bin app: list, Restore (auto-renames on collision), Empty / permanently delete. APIs under `/api/trash*` (path-jail safe, no shell). `trash_enabled` default **true** in `config.example.json`.
+- **Start menu search** — filter apps, bookmarks, and builtins client-side; focus when Start opens; Esc clears the query then closes the menu.
+- **Window snap** — drag titlebar to left/right edges (or top to maximize); keyboard `Ctrl+Alt+←/→/↑/↓` (↓ restores). Client-only.
+
+### Changed
+
+- Version bumped to **3.1.1**; static asset cache busters (`?v=311`).
+
 ## [3.1.0] — 2026-09-01
 
 Desktop-feel pass: window manager polish, richer Explorer, opt-in service/Docker controls.
@@ -54,6 +68,7 @@ Initial public release: portable Flask + static web desktop for headless Linux.
 - `config.example.json` template; machine-local `config.json` gitignored.
 - systemd unit example and reverse-proxy notes.
 
+[3.1.1]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.0...HEAD
 [3.1.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/Kruton1122/Fox-OS/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/Kruton1122/Fox-OS/releases/tag/v3.0.0
