@@ -1405,7 +1405,7 @@
           }},
           { sep: true },
           { label: 'Rename', disabled: !entry || !writable, action: () => $('[data-act="rename"]', root).click() },
-          { label: 'Delete', disabled: !entry || !writable, action: () => deleteSelected(false) },
+          { label: (CFG?.features?.trash === false ? 'Delete' : 'Move to Recycle Bin'), disabled: !entry || !writable, action: () => deleteSelected(false) },
           { label: 'Delete permanently', disabled: !entry || !writable, danger: true, action: () => deleteSelected(true) },
           { sep: true },
           { label: 'New folder', disabled: !writable, action: () => $('[data-act="newfolder"]', root).click() },
