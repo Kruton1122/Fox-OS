@@ -1,4 +1,4 @@
-/* Fox OS frontend — window manager + apps v3.1 */
+/* Fox OS frontend — window manager + apps v3.2 */
 (() => {
   'use strict';
 
@@ -12,6 +12,12 @@
   const ICON_POS_KEY = 'foxos.iconPositions.v1';
   let ctxMenuEl = null;
   let cycleIdx = -1;
+  const SESSION_KEY = 'foxos.windowSession.v1';
+  const FILE_CLIP_KEY = 'foxos.fileClipboard.v1';
+  let fileClipboard = null; // { mode: 'copy'|'cut', items: [{root,path,name,is_dir}] }
+  let sessionRestoring = false;
+  let sessionSaveTimer = null;
+  let taskPreviewEl = null;
 
   const CODE_EXTS = new Set([
     'py', 'js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'go', 'rs', 'c', 'cpp', 'cc', 'h', 'hpp',
@@ -93,6 +99,95 @@
   }
   function saveIconPositions(map) {
     try { localStorage.setItem(ICON_POS_KEY, JSON.stringify(map)); } catch { /* */ }
+  }
+
+  function loadFileClipboard() {
+    try {
+      fileClipboard = JSON.parse(localStorage.getItem(FILE_CLIP_KEY) || 'null');
+    } catch { fileClipboard = null; }
+    return fileClipboard;
+  }
+  function saveFileClipboard(clip) {
+    fileClipboard = clip;
+    try {
+      if (clip) localStorage.setItem(FILE_CLIP_KEY, JSON.stringify(clip));
+      else localStorage.removeItem(FILE_CLIP_KEY);
+    } catch { /* */ }
+  }
+
+  function applyDesktopAppearance() {
+    const desk = CFG?.desktop || {};
+    const root = document.documentElement;
+    const size = desk.icon_size || 'md';
+    root.dataset.iconSize = size;
+    if (desk.accent) {
+      root.style.setProperty('--accent', desk.accent);
+      root.style.setProperty('--title', desk.accent);
+      // lighten slightly for gradient end
+      root.style.setProperty('--title2', desk.accent);
+    } else {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--title');
+      root.style.removeProperty('--title2');
+    }
+    const widgets = $('#widgets');
+    if (widgets) widgets.classList.toggle('hidden', desk.show_widgets === false);
+  }
+
+  function scheduleSessionSave() {
+    if (sessionRestoring) return;
+    clearTimeout(sessionSaveTimer);
+    sessionSaveTimer = setTimeout(saveWindowSession, 250);
+  }
+
+  function saveWindowSession() {
+    if (sessionRestoring) return;
+    const list = [];
+    windows.forEach((rec, id) => {
+      // Skip ephemeral one-offs without restore meta
+      const meta = rec.session || {};
+      const el = rec.el;
+      if (!el) return;
+      list.push({
+        id,
+        app: meta.app || rec.kind || id,
+        title: $('.win-title', el)?.textContent || '',
+        icon: $('.win-ico', el)?.textContent || '',
+        left: el.style.left,
+        top: el.style.top,
+        width: el.style.width || `${el.offsetWidth}px`,
+        height: el.style.height || `${el.offsetHeight}px`,
+        path: meta.path || null,
+        url: meta.url || null,
+        minimized: el.classList.contains('minimized'),
+      });
+    });
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(list)); } catch { /* */ }
+  }
+
+  function clearWindowSession() {
+    try { localStorage.removeItem(SESSION_KEY); } catch { /* */ }
+  }
+
+  function hideTaskPreview() {
+    taskPreviewEl?.remove();
+    taskPreviewEl = null;
+  }
+
+  function showTaskPreview(task, rec) {
+    hideTaskPreview();
+    if (!rec?.el) return;
+    const tip = document.createElement('div');
+    tip.className = 'task-preview';
+    const title = $('.win-title', rec.el)?.textContent || rec.kind || '';
+    const ico = $('.win-ico', rec.el)?.textContent || '';
+    tip.innerHTML = `<span class="task-preview-ico">${escapeHtml(ico)}</span><span class="task-preview-title">${escapeHtml(title)}</span>`;
+    document.body.appendChild(tip);
+    const tr = task.getBoundingClientRect();
+    const tw = tip.offsetWidth;
+    tip.style.left = `${Math.max(4, Math.min(window.innerWidth - tw - 4, tr.left + tr.width / 2 - tw / 2))}px`;
+    tip.style.top = `${Math.max(4, tr.top - tip.offsetHeight - 8)}px`;
+    taskPreviewEl = tip;
   }
 
   function renderDesktopIcons() {
@@ -407,6 +502,37 @@
     w.el.remove();
     w.task?.remove();
     windows.delete(id);
+    hideTaskPreview();
+    scheduleSessionSave();
+  }
+
+  function appGroupKey(id, rec) {
+    const app = rec?.session?.app || rec?.kind || id;
+    if (String(app).startsWith('app:')) return String(app).slice(4);
+    if (String(app).startsWith('web:')) return 'web';
+    if (String(id).startsWith('preview:')) return 'preview';
+    return String(app).split(':')[0];
+  }
+
+  function windowsInGroup(group) {
+    return [...windows.entries()].filter(([id, rec]) => appGroupKey(id, rec) === group);
+  }
+
+  function cycleGroup(group, fromId) {
+    const list = windowsInGroup(group);
+    if (list.length <= 1) {
+      const only = list[0];
+      if (!only) return;
+      const [id, rec] = only;
+      if (rec.el.classList.contains('minimized')) rec.el.classList.remove('minimized');
+      focusWin(id);
+      return;
+    }
+    let idx = list.findIndex(([id]) => id === fromId);
+    idx = (idx + 1) % list.length;
+    const [nid, nrec] = list[idx];
+    nrec.el.classList.remove('minimized');
+    focusWin(nid);
   }
 
 
@@ -544,15 +670,41 @@
     const task = document.createElement('button');
     task.type = 'button';
     task.className = 'task-tab';
-    task.textContent = `${icon || ''} ${title}`.trim();
+    task.title = title || id;
+    task.dataset.group = String(id).split(':')[0];
+    const groupPeers = [...windows.values()].filter((w) => (w.task?.dataset.group || '') === task.dataset.group);
+    const groupCount = groupPeers.length + 1;
+    task.innerHTML = `<span class="task-tab-ico">${escapeHtml(icon || '')}</span><span class="task-tab-label">${escapeHtml(title || id)}</span>${groupCount > 1 ? `<span class="task-tab-count">${groupCount}</span>` : ''}`;
+    // refresh counts on siblings
+    groupPeers.forEach((w) => {
+      const c = w.task?.querySelector('.task-tab-count');
+      if (w.task) {
+        let badge = w.task.querySelector('.task-tab-count');
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'task-tab-count';
+          w.task.appendChild(badge);
+        }
+        badge.textContent = String(groupCount);
+      }
+    });
     task.addEventListener('click', () => {
+      const group = appGroupKey(id, windows.get(id));
+      const peers = windowsInGroup(group);
+      if (peers.length > 1 && el.classList.contains('active') && !el.classList.contains('minimized')) {
+        cycleGroup(group, id);
+        return;
+      }
       if (el.classList.contains('minimized')) el.classList.remove('minimized');
       else if (el.classList.contains('active')) el.classList.add('minimized');
       focusWin(id);
+      scheduleSessionSave();
     });
+    task.addEventListener('mouseenter', () => showTaskPreview(task, windows.get(id)));
+    task.addEventListener('mouseleave', () => hideTaskPreview());
     $('#taskTabs').appendChild(task);
 
-    const rec = { el, task, kind: id, state: {}, onClose: null, restore: null };
+    const rec = { el, task, kind: id, state: {}, onClose: null, restore: null, session: { app: id } };
     windows.set(id, rec);
 
     const toggleMax = () => {
@@ -575,6 +727,7 @@
     makeDraggable(el, $('.win-titlebar', el));
     makeResizable(el);
     focusWin(id);
+    scheduleSessionSave();
     return rec;
   }
 
@@ -632,6 +785,8 @@
       if (side === 'left') snapWindow(rec, 'left');
       else if (side === 'right') snapWindow(rec, 'right');
       else if (side === 'top') snapWindow(rec, 'max');
+    
+      scheduleSessionSave();
     });
   }
 
@@ -673,7 +828,7 @@
         win.style.width = `${width}px`;
         win.style.height = `${height}px`;
       });
-      handle.addEventListener('pointerup', () => { resizing = false; });
+      handle.addEventListener('pointerup', () => { resizing = false; scheduleSessionSave(); });
     });
   }
 
@@ -765,6 +920,8 @@
       launcher: openLauncher,
       notes: openNotes,
       calc: openCalc,
+      browser: openBrowser,
+      terminal: openTerminal,
     };
     if (app.action && actions[app.action]) return actions[app.action]();
     const openUrl = app.embed || app.url;
@@ -867,6 +1024,8 @@
       hint?.classList.remove('hidden');
     });
 
+    rec.session = { app: 'web', url: embedUrl };
+    scheduleSessionSave();
     return rec;
   }
 
@@ -1023,6 +1182,7 @@
   /* ── File Explorer (Windows-style) ──────────────────────────────────── */
   function openFiles() {
     const id = 'files';
+    if (windows.has(id)) { focusWin(id); return windows.get(id); }
     const rootDefault = CFG.default_root || 'home';
     const rec = createWindow({
       id,
@@ -1035,15 +1195,17 @@
           <div class="exp-cmd">
             <button type="button" data-act="newfolder" title="New folder">📁+ New folder</button>
             <span class="exp-sep"></span>
-            <button type="button" data-act="cut" disabled title="Coming soon">Cut</button>
-            <button type="button" data-act="copy" title="Copy path">Copy path</button>
-            <button type="button" data-act="paste" disabled>Paste</button>
+            <button type="button" data-act="cut" title="Cut (Ctrl+X)">Cut</button>
+            <button type="button" data-act="copy" title="Copy (Ctrl+C)">Copy</button>
+            <button type="button" data-act="copy-path" title="Copy path text">Copy path</button>
+            <button type="button" data-act="paste" title="Paste (Ctrl+V)">Paste</button>
             <span class="exp-sep"></span>
             <button type="button" data-act="rename">Rename</button>
             <button type="button" data-act="delete" class="exp-danger" title="Move to Recycle Bin (Shift+Delete = permanent)">Delete</button>
             <span class="exp-sep"></span>
             <label class="exp-upload">Upload<input type="file" data-act="upload" hidden /></label>
             <button type="button" data-act="download">Download</button>
+            <button type="button" data-act="zip" title="Download selected files as zip">Zip</button>
             <span class="exp-spacer"></span>
             <button type="button" data-act="view-details" class="active" title="Details">☰</button>
             <button type="button" data-act="view-icons" title="Icons">▦</button>
@@ -1080,6 +1242,7 @@
       root: rootDefault,
       path: '',
       selected: null,
+      selectedPaths: [],
       selectedEntry: null,
       entries: [],
       filter: '',
@@ -1088,7 +1251,10 @@
       histIdx: -1,
       layout: 'details', // details | icons
       suppressHist: false,
+      lastClickedPath: null,
+      writable: false,
     };
+    loadFileClipboard();
     rec.state = state;
 
     const setStatus = (left, right) => {
@@ -1372,47 +1538,214 @@
       }
     };
 
-    const bindEntryEl = (el, data, isRow) => {
-      const select = () => {
-        const list = $('[data-act="list"]', root);
-        list.querySelectorAll('.selected').forEach((r) => r.classList.remove('selected'));
-        el.classList.add('selected');
-        state.selected = el.dataset.path;
-        state.selectedEntry = (state.entries || []).find((x) => x.path === state.selected) || null;
+    const selectedEntries = () => {
+      const set = new Set(state.selectedPaths);
+      return (state.entries || []).filter((e) => set.has(e.path));
+    };
+
+    const syncSelectionUI = () => {
+      const list = $('[data-act="list"]', root);
+      const set = new Set(state.selectedPaths);
+      list.querySelectorAll('[data-path]').forEach((node) => {
+        node.classList.toggle('selected', set.has(node.dataset.path));
+      });
+      state.selected = state.selectedPaths.length === 1 ? state.selectedPaths[0] : (state.selectedPaths[0] || null);
+      state.selectedEntry = state.selected
+        ? (state.entries || []).find((x) => x.path === state.selected) || null
+        : null;
+      if (state.selectedPaths.length > 1) {
+        const d = $('[data-act="details"]', root);
+        if (d) d.innerHTML = `<div class="exp-details-empty">${state.selectedPaths.length} items selected</div>`;
+      } else {
         showDetailsEntry(state.selectedEntry);
+      }
+      const pasteBtn = $('[data-act="paste"]', root);
+      if (pasteBtn) pasteBtn.disabled = !(fileClipboard && fileClipboard.items?.length && state.view === 'folder' && state.writable);
+    };
+
+    const selectPaths = (paths, { additive = false } = {}) => {
+      const uniq = [...new Set(paths.filter(Boolean))];
+      if (additive) {
+        const set = new Set(state.selectedPaths);
+        uniq.forEach((p) => { if (set.has(p)) set.delete(p); else set.add(p); });
+        state.selectedPaths = [...set];
+      } else {
+        state.selectedPaths = uniq;
+      }
+      syncSelectionUI();
+    };
+
+    const bindEntryEl = (el, data, isRow) => {
+      state.writable = !!data?.writable;
+      const path = el.dataset.path;
+      const select = (ev) => {
+        const entries = state.entries || [];
+        if (ev.shiftKey && state.lastClickedPath) {
+          const paths = entries.map((e) => e.path);
+          const a = paths.indexOf(state.lastClickedPath);
+          const b = paths.indexOf(path);
+          if (a >= 0 && b >= 0) {
+            const [lo, hi] = a < b ? [a, b] : [b, a];
+            selectPaths(paths.slice(lo, hi + 1));
+            return;
+          }
+        }
+        if (ev.ctrlKey || ev.metaKey) {
+          selectPaths([path], { additive: true });
+          state.lastClickedPath = path;
+          return;
+        }
+        selectPaths([path]);
+        state.lastClickedPath = path;
       };
-      el.addEventListener('click', select);
+      el.addEventListener('click', (ev) => select(ev));
       el.addEventListener('dblclick', () => {
-        select();
+        selectPaths([path]);
         openEntry(state.selectedEntry || {
-          path: el.dataset.path,
+          path,
           is_dir: el.dataset.dir === '1',
-          name: el.dataset.path?.split('/').pop(),
+          name: path?.split('/').pop(),
         });
+      });
+      el.draggable = true;
+      el.addEventListener('dragstart', (ev) => {
+        if (!state.selectedPaths.includes(path)) selectPaths([path]);
+        const payload = {
+          foxos: true,
+          items: selectedEntries().map((e) => ({
+            root: state.root,
+            path: e.path,
+            name: e.name,
+            is_dir: !!e.is_dir,
+          })),
+        };
+        ev.dataTransfer.setData('application/x-foxos-files', JSON.stringify(payload));
+        ev.dataTransfer.setData('text/plain', payload.items.map((i) => i.path).join('\n'));
+        ev.dataTransfer.effectAllowed = 'copyMove';
+        el.classList.add('dragging');
+      });
+      el.addEventListener('dragend', () => el.classList.remove('dragging'));
+      el.addEventListener('dragover', (ev) => {
+        if (el.dataset.dir !== '1') return;
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = ev.ctrlKey ? 'copy' : 'move';
+        el.classList.add('drop-target');
+      });
+      el.addEventListener('dragleave', () => el.classList.remove('drop-target'));
+      el.addEventListener('drop', async (ev) => {
+        el.classList.remove('drop-target');
+        if (el.dataset.dir !== '1') return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        let payload;
+        try { payload = JSON.parse(ev.dataTransfer.getData('application/x-foxos-files') || '{}'); } catch { return; }
+        if (!payload.foxos || !payload.items?.length) return;
+        const destPath = path;
+        const copy = !!ev.ctrlKey || !!ev.altKey;
+        await transferItems(payload.items, state.root, destPath, copy);
       });
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        select();
-        const entry = state.selectedEntry;
+        if (!state.selectedPaths.includes(path)) selectPaths([path]);
+        const entry = (state.entries || []).find((x) => x.path === path);
         const writable = !!data?.writable;
+        const multi = state.selectedPaths.length > 1;
         const items = [
-          { label: 'Open', action: () => openEntry(entry) },
-          { label: 'Preview', disabled: !entry || entry.is_dir, action: () => openPreview(state.root, entry.path, entry.name) },
-          { label: 'Download', disabled: !entry || entry.is_dir, action: () => {
-            const q = new URLSearchParams({ root: state.root, path: entry.path });
-            window.open(apiUrl(`api/files/download?${q}`), '_blank');
-          }},
+          { label: 'Open', disabled: multi, action: () => openEntry(entry) },
+          { label: 'Preview', disabled: multi || !entry || entry.is_dir, action: () => openPreview(state.root, entry.path, entry.name) },
+          { label: 'Download', disabled: !entry || (multi ? selectedEntries().some((x) => x.is_dir) : entry.is_dir), action: () => downloadSelected() },
+          { label: 'Download zip', disabled: !selectedEntries().filter((x) => !x.is_dir).length, action: () => zipSelected() },
           { sep: true },
-          { label: 'Rename', disabled: !entry || !writable, action: () => $('[data-act="rename"]', root).click() },
-          { label: (CFG?.features?.trash === false ? 'Delete' : 'Move to Recycle Bin'), disabled: !entry || !writable, action: () => deleteSelected(false) },
-          { label: 'Delete permanently', disabled: !entry || !writable, danger: true, action: () => deleteSelected(true) },
+          { label: 'Cut', disabled: !writable || !state.selectedPaths.length, action: () => cutSelected() },
+          { label: 'Copy', disabled: !state.selectedPaths.length, action: () => copySelected() },
+          { label: 'Paste', disabled: !writable || !fileClipboard?.items?.length, action: () => pasteClipboard() },
+          { sep: true },
+          { label: 'Rename', disabled: multi || !entry || !writable, action: () => $('[data-act="rename"]', root).click() },
+          { label: (CFG?.features?.trash === false ? 'Delete' : 'Move to Recycle Bin'), disabled: !writable || !state.selectedPaths.length, action: () => deleteSelected(false) },
+          { label: 'Delete permanently', disabled: !writable || !state.selectedPaths.length, danger: true, action: () => deleteSelected(true) },
           { sep: true },
           { label: 'New folder', disabled: !writable, action: () => $('[data-act="newfolder"]', root).click() },
           { label: 'Refresh', action: () => $('[data-act="refresh"]', root).click() },
         ];
         showContextMenu(e.clientX, e.clientY, items);
       });
+    };
+
+    const transferItems = async (items, destRoot, destPath, copy) => {
+      if (!items?.length) return;
+      const endpoint = copy ? 'api/files/copy' : 'api/files/move';
+      try {
+        const res = await api(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: items.map((i) => ({ root: i.root, path: i.path })),
+            dest_root: destRoot,
+            dest_path: destPath || '',
+          }),
+        });
+        if (res.errors?.length) setStatus(res.errors[0], '');
+        else setStatus(`${copy ? 'Copied' : 'Moved'} ${res.results?.length || 0} item(s)`, '');
+        if (!copy) saveFileClipboard(null);
+        await load();
+      } catch (e) { alert(e.message); }
+    };
+
+    const copySelected = () => {
+      const items = selectedEntries().map((e) => ({
+        root: state.root, path: e.path, name: e.name, is_dir: !!e.is_dir,
+      }));
+      if (!items.length) { alert('Select files first.'); return; }
+      saveFileClipboard({ mode: 'copy', items });
+      setStatus(`Copied ${items.length} item(s)`, '');
+      syncSelectionUI();
+    };
+    const cutSelected = () => {
+      const items = selectedEntries().map((e) => ({
+        root: state.root, path: e.path, name: e.name, is_dir: !!e.is_dir,
+      }));
+      if (!items.length) { alert('Select files first.'); return; }
+      saveFileClipboard({ mode: 'cut', items });
+      setStatus(`Cut ${items.length} item(s)`, '');
+      syncSelectionUI();
+    };
+    const pasteClipboard = async () => {
+      if (state.view !== 'folder') { alert('Open a folder first.'); return; }
+      const clip = fileClipboard || loadFileClipboard();
+      if (!clip?.items?.length) { alert('Clipboard empty.'); return; }
+      await transferItems(clip.items, state.root, state.path, clip.mode !== 'cut');
+    };
+    const downloadSelected = () => {
+      const files = selectedEntries().filter((e) => !e.is_dir);
+      if (!files.length) { alert('Select file(s) to download.'); return; }
+      if (files.length === 1) {
+        const q = new URLSearchParams({ root: state.root, path: files[0].path });
+        window.open(apiUrl(`api/files/download?${q}`), '_blank');
+        return;
+      }
+      zipSelected();
+    };
+    const zipSelected = async () => {
+      const files = selectedEntries().filter((e) => !e.is_dir);
+      if (!files.length) { alert('Select file(s) to zip (folders not supported).'); return; }
+      try {
+        const r = await fetch(apiUrl('api/files/zip'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ root: state.root, paths: files.map((f) => f.path) }),
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new Error(data.error || 'zip failed');
+        }
+        const blob = await r.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'foxos-files.zip';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (e) { alert(e.message); }
     };
 
     const load = async () => {
@@ -1448,7 +1781,10 @@
         const data = await api(`api/files?${q}`);
         state.path = data.path || '';
         state.selected = null;
+        state.selectedPaths = [];
         state.selectedEntry = null;
+        state.lastClickedPath = null;
+        state.writable = !!data.writable;
         state.entries = data.entries || [];
         renderAddress(data);
         renderFileTable(data);
@@ -1519,53 +1855,77 @@
         load();
       } catch (e) { alert(e.message); }
     };
-    $('[data-act="copy"]', root).onclick = async () => {
+    $('[data-act="copy"]', root).onclick = () => copySelected();
+    $('[data-act="cut"]', root).onclick = () => cutSelected();
+    $('[data-act="paste"]', root).onclick = () => pasteClipboard();
+    $('[data-act="copy-path"]', root).onclick = async () => {
       const text = state.selected
         ? `${placeLabel(state.root)}/${state.selected}`
         : (state.view === 'folder' ? `${placeLabel(state.root)}/${state.path}` : state.view);
       try { await navigator.clipboard.writeText(text); setStatus('Path copied', ''); } catch { /* */ }
     };
     $('[data-act="rename"]', root).onclick = async () => {
-      if (!state.selected) { alert('Select a file or folder first.'); return; }
-      const base = state.selected.split('/').pop();
+      if (state.selectedPaths.length !== 1) { alert('Select a single file or folder to rename.'); return; }
+      const base = state.selectedPaths[0].split('/').pop();
       const name = prompt('Rename to:', base);
       if (!name || name === base) return;
       try {
         await api('api/files/rename', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ root: state.root, path: state.selected, name }),
+          body: JSON.stringify({ root: state.root, path: state.selectedPaths[0], name }),
         });
         load();
       } catch (e) { alert(e.message); }
     };
     const deleteSelected = async (permanent) => {
-      if (!state.selected) { alert('Select a file or folder first.'); return; }
-      const name = state.selected.split('/').pop();
+      const paths = [...state.selectedPaths];
+      if (!paths.length) { alert('Select a file or folder first.'); return; }
+      const label = paths.length === 1 ? paths[0].split('/').pop() : `${paths.length} items`;
       if (permanent) {
-        if (!confirm(`Permanently delete '${name}'? This cannot be undone.`)) return;
+        if (!confirm(`Permanently delete ${label}? This cannot be undone.`)) return;
       } else if (CFG?.features?.trash === false) {
-        if (!confirm(`Delete '${name}'?`)) return;
+        if (!confirm(`Delete ${label}?`)) return;
       }
       try {
-        const body = { root: state.root, path: state.selected };
-        if (permanent) body.permanent = true;
-        const res = await api('api/files/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (res.trashed) setStatus(`Moved '${name}' to Recycle Bin`, '');
+        if (paths.length === 1) {
+          const body = { root: state.root, path: paths[0] };
+          if (permanent) body.permanent = true;
+          const res = await api('api/files/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (res.trashed) setStatus(`Moved '${label}' to Recycle Bin`, '');
+        } else {
+          const body = { root: state.root, paths, permanent: !!permanent };
+          const res = await api('api/files/delete-bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const n = res.results?.length || 0;
+          setStatus(permanent ? `Deleted ${n} item(s)` : `Moved ${n} item(s) to Recycle Bin`, '');
+          if (res.errors?.length) alert(res.errors.join('\n'));
+        }
         load();
       } catch (e) { alert(e.message); }
     };
     $('[data-act="delete"]', root).onclick = () => deleteSelected(false);
     root.addEventListener('keydown', (e) => {
-      if (e.key === 'Delete' && state.selected) {
+      if (e.key === 'Delete' && state.selectedPaths.length) {
         e.preventDefault();
         deleteSelected(!!e.shiftKey);
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelected(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') { e.preventDefault(); cutSelected(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteClipboard(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && state.view === 'folder') {
+        e.preventDefault();
+        selectPaths((state.entries || []).map((x) => x.path));
+      }
     });
+    root.tabIndex = 0;
     $('[data-act="upload"]', root).onchange = async (e) => {
       if (state.view !== 'folder') { alert('Open a folder first.'); e.target.value = ''; return; }
       const file = e.target.files?.[0];
@@ -1582,25 +1942,42 @@
       } catch (err) { alert(err.message); }
       e.target.value = '';
     };
-    $('[data-act="download"]', root).onclick = () => {
-      if (!state.selected) { alert('Select a file first.'); return; }
-      if (state.selectedEntry?.is_dir) { alert('Pick a file to download.'); return; }
-      const q = new URLSearchParams({ root: state.root, path: state.selected });
-      window.open(apiUrl(`api/files/download?${q}`), '_blank');
-    };
+    $('[data-act="download"]', root).onclick = () => downloadSelected();
+    $('[data-act="zip"]', root).onclick = () => zipSelected();
 
-    $('[data-act="list"]', root).addEventListener('contextmenu', (e) => {
+    const listEl = $('[data-act="list"]', root);
+    listEl.addEventListener('contextmenu', (e) => {
       if (e.target.closest('tr[data-path], .exp-icon-item, .exp-drive')) return;
       e.preventDefault();
       showContextMenu(e.clientX, e.clientY, [
+        { label: 'Paste', disabled: !fileClipboard?.items?.length || !state.writable, action: () => pasteClipboard() },
         { label: 'New folder', action: () => $('[data-act="newfolder"]', root).click() },
         { label: 'Refresh', action: () => $('[data-act="refresh"]', root).click() },
       ]);
+    });
+    listEl.addEventListener('dragover', (ev) => {
+      if (state.view !== 'folder') return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = ev.ctrlKey ? 'copy' : 'move';
+      listEl.classList.add('drop-target');
+    });
+    listEl.addEventListener('dragleave', () => listEl.classList.remove('drop-target'));
+    listEl.addEventListener('drop', async (ev) => {
+      listEl.classList.remove('drop-target');
+      if (state.view !== 'folder') return;
+      ev.preventDefault();
+      let payload;
+      try { payload = JSON.parse(ev.dataTransfer.getData('application/x-foxos-files') || '{}'); } catch { return; }
+      if (!payload.foxos || !payload.items?.length) return;
+      // Ignore drop onto own selection in same folder without a folder target
+      if (ev.target.closest('tr[data-path][data-dir="1"], .exp-icon-item[data-dir="1"]')) return;
+      await transferItems(payload.items, state.root, state.path, !!ev.ctrlKey || !!ev.altKey);
     });
 
     // start at This PC so network is obvious
     state.view = 'thispc';
     load();
+    rec.session = { app: 'files' };
   }
 
   function extOf(name) {
@@ -2479,56 +2856,457 @@
     });
   }
 
-  /* ── Settings ───────────────────────────────────────────────────────── */
-  function openSettings() {
-    createWindow({
-      id: 'settings',
-      title: 'Settings',
-      icon: '🔧',
-      width: 500,
-      height: 440,
+  /* ── Browser (iframe + optional system Chromium) ────────────────────── */
+  function openBrowser(startUrl) {
+    const id = 'browser';
+    if (windows.has(id)) {
+      focusWin(id);
+      const rec = windows.get(id);
+      if (startUrl) {
+        const input = $('[data-act="url"]', rec.el);
+        const frame = $('[data-act="frame"]', rec.el);
+        if (input && frame) {
+          input.value = startUrl;
+          navigateBrowser(rec, startUrl);
+        }
+      }
+      return;
+    }
+    const initial = startUrl || 'https://example.com/';
+    const canSystem = !!(CFG?.allow_system_browser && CFG?.system_browser_available);
+    const rec = createWindow({
+      id,
+      title: 'Browser',
+      icon: '🌐',
+      width: Math.min(960, window.innerWidth - 48),
+      height: Math.min(640, window.innerHeight - 80),
       bodyHtml: `
-        <div class="settings">
-          <h2>Fox OS settings</h2>
-          <p>Version <span class="badge badge-ok">v${escapeHtml(CFG.version || '2')}</span>
-            · <span class="badge">${CFG.allow_write ? 'Writes enabled' : 'Read-only'}</span></p>
-          <h3 style="margin-top:14px;font-size:13px;">Features</h3>
-          <ul>
-            <li>Docker: ${CFG.features?.docker ? '✓' : '—'}</li>
-            <li>Journal: ${CFG.features?.journal ? '✓' : '—'}</li>
-            <li>systemctl: ${CFG.features?.systemctl ? '✓' : '—'}</li>
-            <li>Service control: ${CFG.features?.service_control ? '✓ enabled' : '— off'}</li>
-            <li>Docker control: ${CFG.features?.docker_control ? '✓ enabled' : '— off'}</li>
-            <li>Recycle Bin: ${CFG.features?.trash === false ? '— off' : '✓'}</li>
-          </ul>
-          <h3 style="margin-top:14px;font-size:13px;">Mounted places</h3>
-          <ul>
-            ${(CFG.roots || []).map((r) => `
-              <li><strong>${escapeHtml(r.label)}</strong> — <code>${escapeHtml(r.path)}</code>
-                ${r.exists ? '' : ' (missing)'}
-                ${r.writable ? ' · writable' : ' · read-only'}
-              </li>
-            `).join('')}
-          </ul>
-          <p style="margin-top:14px">Edit <code>config.json</code> (from <code>config.example.json</code>) for roots, apps, links, and services — then restart the Fox OS process.</p>
-          <p class="muted" style="font-size:12px">Portable headless desktop · v${escapeHtml(CFG.version || '')}</p>
+        <div class="webapp browser-app">
+          <div class="webapp-bar">
+            <button type="button" data-act="back" title="Back">←</button>
+            <button type="button" data-act="fwd" title="Forward">→</button>
+            <button type="button" data-act="reload" title="Reload">↻</button>
+            <input class="webapp-url" data-act="url" value="${escapeHtml(initial)}" spellcheck="false" />
+            <button type="button" data-act="go" title="Go">Go</button>
+            <button type="button" data-act="popout" title="Open in this browser tab">↗</button>
+            ${canSystem ? '<button type="button" data-act="system" title="Open on server Chromium">🖥</button>' : ''}
+          </div>
+          <div class="webapp-frame-wrap">
+            <div class="webapp-loading" data-act="loading">Loading…</div>
+            <iframe class="webapp-frame" data-act="frame" title="Browser" referrerpolicy="no-referrer-when-downgrade"></iframe>
+          </div>
+          <div class="webapp-hint hidden" data-act="hint">
+            <p>This page refused to load in a window (X-Frame-Options / CSP). Many sites block iframes.</p>
+            <p class="muted">Use <strong>Open externally</strong> for a new browser tab${canSystem ? ', or server Chromium on the Pi display' : ''}.</p>
+            <button type="button" data-act="popout2">Open externally</button>
+            ${canSystem ? '<button type="button" data-act="system2">Open on server Chromium</button>' : ''}
+          </div>
         </div>`,
     });
+    rec.el.classList.add('win-webapp');
+    rec.session = { app: 'browser', url: initial };
+    const shell = $('.browser-app', rec.el);
+    const frame = $('[data-act="frame"]', shell);
+    const loading = $('[data-act="loading"]', shell);
+    const hint = $('[data-act="hint"]', shell);
+    const urlInput = $('[data-act="url"]', shell);
+
+    const hideLoading = () => loading?.classList.add('hidden');
+    frame.addEventListener('load', () => {
+      hideLoading();
+      // Cross-origin frames throw; treat as possible frame-block if about:blank stuck
+      try {
+        const href = frame.contentWindow?.location?.href;
+        if (href && href !== 'about:blank') urlInput.value = href;
+      } catch { /* ignore cross-origin */ }
+    });
+    frame.addEventListener('error', () => {
+      hideLoading();
+      hint?.classList.remove('hidden');
+    });
+
+    const openExternal = (u) => {
+      const target = normalizeBrowseUrl(u || urlInput.value);
+      if (target) window.open(target, '_blank', 'noopener');
+    };
+    const openSystem = async (u) => {
+      const target = normalizeBrowseUrl(u || urlInput.value);
+      if (!target) return;
+      try {
+        await api('api/browser/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: target }),
+        });
+      } catch (e) { alert(e.message); }
+    };
+
+    $('[data-act="go"]', shell).onclick = () => navigateBrowser(rec, urlInput.value);
+    urlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); navigateBrowser(rec, urlInput.value); }
+    });
+    $('[data-act="reload"]', shell).onclick = () => {
+      loading?.classList.remove('hidden');
+      hint?.classList.add('hidden');
+      try { frame.contentWindow.location.reload(); } catch { frame.src = frame.src; }
+    };
+    $('[data-act="back"]', shell).onclick = () => { try { frame.contentWindow.history.back(); } catch { /* */ } };
+    $('[data-act="fwd"]', shell).onclick = () => { try { frame.contentWindow.history.forward(); } catch { /* */ } };
+    $('[data-act="popout"]', shell).onclick = () => openExternal();
+    $('[data-act="popout2"]', shell).onclick = () => openExternal();
+    $('[data-act="system"]', shell)?.addEventListener('click', () => openSystem());
+    $('[data-act="system2"]', shell)?.addEventListener('click', () => openSystem());
+
+    // Soft detect frame blocking after timeout
+    setTimeout(() => {
+      hideLoading();
+      try {
+        const doc = frame.contentDocument;
+        if (!doc || doc.location.href === 'about:blank') hint?.classList.remove('hidden');
+      } catch {
+        // cross-origin usually means it loaded (or was blocked after navigation) — leave hint hidden
+      }
+    }, 8000);
+
+    navigateBrowser(rec, initial);
+    return rec;
+  }
+
+  function normalizeBrowseUrl(raw) {
+    let u = String(raw || '').trim();
+    if (!u) return '';
+    if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
+    try {
+      const parsed = new URL(u);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+      return parsed.toString();
+    } catch { return ''; }
+  }
+
+  function navigateBrowser(rec, raw) {
+    const url = normalizeBrowseUrl(raw);
+    if (!url) { alert('Enter an http(s) URL.'); return; }
+    const shell = $('.browser-app', rec.el);
+    const frame = $('[data-act="frame"]', shell);
+    const loading = $('[data-act="loading"]', shell);
+    const hint = $('[data-act="hint"]', shell);
+    const urlInput = $('[data-act="url"]', shell);
+    urlInput.value = url;
+    loading?.classList.remove('hidden');
+    hint?.classList.add('hidden');
+    frame.src = url;
+    rec.session = { ...(rec.session || {}), app: 'browser', url };
+    scheduleSessionSave();
+  }
+
+  /* ── Terminal (Wetty / embed passthrough) ───────────────────────────── */
+  function resolveTerminalTarget() {
+    const embedKey = (CFG?.terminal_embed || '').trim();
+    if (embedKey) {
+      return { kind: 'embed', url: `/embed/${embedKey}/`, label: 'Terminal', external: CFG?.terminal_url || '' };
+    }
+    const direct = (CFG?.terminal_url || '').trim();
+    if (direct) {
+      return { kind: 'url', url: toEmbedUrl(direct), label: 'Terminal', external: direct };
+    }
+    // Prefer configured wetty app / link
+    const wettyApp = (CFG?.apps || []).find((a) => a.id === 'wetty' || /wetty/i.test(a.label || ''));
+    if (wettyApp?.url || wettyApp?.embed) {
+      const u = wettyApp.embed || wettyApp.url;
+      return { kind: 'url', url: toEmbedUrl(u), label: wettyApp.label || 'Terminal', external: wettyApp.url || u };
+    }
+    const wettyLink = (CFG?.links || []).find((l) => l.id === 'wetty' || /wetty|terminal/i.test(l.label || ''));
+    if (wettyLink?.url) {
+      return { kind: 'url', url: toEmbedUrl(wettyLink.url), label: wettyLink.label || 'Terminal', external: wettyLink.url };
+    }
+    // embed_map value "wetty"
+    const map = CFG?.embed_map || {};
+    if (Object.values(map).includes('wetty')) {
+      return { kind: 'embed', url: '/embed/wetty/', label: 'Terminal', external: '' };
+    }
+    return null;
+  }
+
+  function openTerminal() {
+    const target = resolveTerminalTarget();
+    if (!target) {
+      createWindow({
+        id: 'terminal-setup',
+        title: 'Terminal setup',
+        icon: '⌨',
+        width: 480,
+        height: 320,
+        bodyHtml: `
+          <div class="settings">
+            <h2>Terminal not configured</h2>
+            <p>Fox OS embeds a web terminal (e.g. <strong>Wetty</strong>) — it does not invent SSH passwords.</p>
+            <ol>
+              <li>Run Wetty (or similar) behind your reverse proxy.</li>
+              <li>Add <code>"wetty.home": "wetty"</code> (or your host) to <code>embed_map</code>.</li>
+              <li>Set <code>terminal_embed</code> to <code>"wetty"</code> and/or <code>terminal_url</code> to the public URL in <code>config.json</code>.</li>
+            </ol>
+            <p class="muted">See config.example.json · restart Fox OS after editing config.</p>
+          </div>`,
+      });
+      return;
+    }
+    openWebApp({
+      id: 'terminal',
+      title: target.label || 'Terminal',
+      icon: '⌨',
+      url: target.url,
+      externalUrl: target.external || target.url,
+      width: Math.min(900, window.innerWidth - 48),
+      height: Math.min(560, window.innerHeight - 80),
+    });
+    const rec = windows.get('terminal');
+    if (rec) rec.session = { app: 'terminal', url: target.url };
+  }
+
+  /* ── Settings ───────────────────────────────────────────────────────── */
+  function openSettings() {
+    const id = 'settings';
+    if (windows.has(id)) { focusWin(id); return; }
+    const desk = CFG.desktop || {};
+    const caps = CFG.trash_caps || {};
+    const rec = createWindow({
+      id,
+      title: 'Settings',
+      icon: '🔧',
+      width: 560,
+      height: 620,
+      bodyHtml: `
+        <div class="settings settings-rich">
+          <h2>Fox OS settings</h2>
+          <p>Version <span class="badge badge-ok">v${escapeHtml(CFG.version || '')}</span>
+            · <span class="badge">${CFG.allow_write ? 'Writes enabled' : 'Read-only'}</span></p>
+
+          <section class="settings-section">
+            <h3>Wallpaper</h3>
+            <div class="wp-grid" data-act="wp-grid"><div class="muted">Loading…</div></div>
+            <div class="settings-row">
+              <label class="exp-upload btn-like">Upload wallpaper<input type="file" accept=".png,.jpg,.jpeg,.webp,.svg,image/*" data-act="wp-upload" hidden /></label>
+              <button type="button" data-act="wp-reset">Reset to default</button>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <h3>Appearance</h3>
+            <label class="settings-check"><input type="checkbox" data-act="widgets" ${desk.show_widgets === false ? '' : 'checked'}/> Show desktop widgets</label>
+            <label>Icon size
+              <select data-act="icon-size">
+                <option value="sm" ${desk.icon_size === 'sm' ? 'selected' : ''}>Small</option>
+                <option value="md" ${!desk.icon_size || desk.icon_size === 'md' ? 'selected' : ''}>Medium</option>
+                <option value="lg" ${desk.icon_size === 'lg' ? 'selected' : ''}>Large</option>
+              </select>
+            </label>
+            <label>Accent / titlebar
+              <input type="color" data-act="accent" value="${escapeHtml(desk.accent || '#1a3a5c')}" />
+              <button type="button" data-act="accent-clear">Clear</button>
+            </label>
+            <div class="settings-row">
+              <button type="button" data-act="save-appearance">Save appearance</button>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <h3>Apps</h3>
+            <div class="settings-row">
+              <button type="button" data-act="open-term">Open Terminal</button>
+              <button type="button" data-act="open-browser">Open Browser</button>
+            </div>
+            <p class="muted" style="font-size:12px">System Chromium launch: ${CFG.allow_system_browser ? (CFG.system_browser_available ? '✓ allowed' : 'allowed (binary missing)') : '— off (config allow_system_browser)'} · opens on the <em>server</em> display.</p>
+          </section>
+
+          <section class="settings-section">
+            <h3>Status (read-only)</h3>
+            <ul>
+              <li>Docker: ${CFG.features?.docker ? '✓' : '—'}</li>
+              <li>Journal: ${CFG.features?.journal ? '✓' : '—'}</li>
+              <li>systemctl: ${CFG.features?.systemctl ? '✓' : '—'}</li>
+              <li>Service control: ${CFG.features?.service_control ? '✓ enabled' : '— off'} <span class="muted">(config only)</span></li>
+              <li>Docker control: ${CFG.features?.docker_control ? '✓ enabled' : '— off'} <span class="muted">(config only)</span></li>
+              <li>Recycle Bin: ${caps.enabled === false ? '— off' : '✓'} · caps ${caps.max_items ?? '—'} items / ${caps.max_mb ?? '—'} MB / ${caps.max_age_days ?? '—'} days</li>
+            </ul>
+          </section>
+
+          <section class="settings-section">
+            <h3>Session</h3>
+            <div class="settings-row">
+              <button type="button" data-act="clear-session">Clear saved windows</button>
+              <button type="button" data-act="reset-icons">Reset icon positions</button>
+            </div>
+          </section>
+
+          <p class="muted" style="font-size:12px;margin-top:12px">Dangerous control flags are not toggleable here. Edit <code>config.json</code> on the server for roots, embed_map, terminal_*, allow_system_browser.</p>
+        </div>`,
+    });
+    rec.session = { app: 'settings' };
+    const root = $('.settings-rich', rec.el);
+
+    const refreshWp = async () => {
+      const grid = $('[data-act="wp-grid"]', root);
+      try {
+        const data = await api('api/wallpaper/list');
+        grid.innerHTML = (data.items || []).map((it) => `
+          <button type="button" class="wp-thumb ${it.current ? 'current' : ''}" data-name="${escapeHtml(it.name)}" data-source="${escapeHtml(it.source)}" title="${escapeHtml(it.label)}">
+            <img src="${escapeHtml(apiUrl(it.url.replace(/^\//, '')))}" alt="" loading="lazy" />
+            <span>${escapeHtml(it.label)}</span>
+          </button>`).join('') || '<div class="muted">No wallpapers found</div>';
+        grid.querySelectorAll('.wp-thumb').forEach((btn) => {
+          btn.onclick = async () => {
+            try {
+              const res = await api('api/wallpaper/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: btn.dataset.name, source: btn.dataset.source }),
+              });
+              applyWallpaperFromMeta(res.wallpaper);
+              refreshWp();
+            } catch (e) { alert(e.message); }
+          };
+        });
+      } catch (e) {
+        grid.innerHTML = `<div class="muted">${escapeHtml(e.message)}</div>`;
+      }
+    };
+    refreshWp();
+
+    $('[data-act="wp-upload"]', root).onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      try {
+        const r = await fetch(apiUrl('api/wallpaper/upload'), { method: 'POST', body: fd });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'upload failed');
+        applyWallpaperFromMeta(data.wallpaper);
+        refreshWp();
+      } catch (err) { alert(err.message); }
+      e.target.value = '';
+    };
+    $('[data-act="wp-reset"]', root).onclick = async () => {
+      try {
+        const res = await api('api/wallpaper/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        applyWallpaperFromMeta(res.wallpaper);
+        refreshWp();
+      } catch (e) { alert(e.message); }
+    };
+    $('[data-act="save-appearance"]', root).onclick = async () => {
+      const show_widgets = $('[data-act="widgets"]', root).checked;
+      const icon_size = $('[data-act="icon-size"]', root).value;
+      const accent = $('[data-act="accent"]', root).value;
+      try {
+        const res = await api('api/desktop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ show_widgets, icon_size, accent }),
+        });
+        CFG.desktop = {
+          show_widgets: res.desktop.show_widgets,
+          icon_size: res.desktop.icon_size,
+          accent: res.desktop.accent || '',
+        };
+        applyDesktopAppearance();
+      } catch (e) { alert(e.message); }
+    };
+    $('[data-act="accent-clear"]', root).onclick = async () => {
+      try {
+        const res = await api('api/desktop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accent: '' }),
+        });
+        CFG.desktop = { ...(CFG.desktop || {}), accent: '' };
+        $('[data-act="accent"]', root).value = '#1a3a5c';
+        applyDesktopAppearance();
+      } catch (e) { alert(e.message); }
+    };
+    $('[data-act="open-term"]', root).onclick = () => openTerminal();
+    $('[data-act="open-browser"]', root).onclick = () => openBrowser();
+    $('[data-act="clear-session"]', root).onclick = () => {
+      clearWindowSession();
+      alert('Saved window session cleared. Open windows stay until you close them.');
+    };
+    $('[data-act="reset-icons"]', root).onclick = () => {
+      saveIconPositions({});
+      renderDesktopIcons();
+    };
+  }
+
+  function applyWallpaperFromMeta(wp) {
+    if (!wp) return;
+    CFG.wallpaper = wp.name;
+    CFG.wallpaper_url = wp.url;
+    CFG.wallpaper_source = wp.source;
+    applyWallpaper();
   }
 
   function applyWallpaper() {
     const img = $('#wallpaperImg');
     if (!img) return;
+    const url = CFG?.wallpaper_url;
     const name = CFG?.wallpaper;
-    if (!name) {
+    if (!url && !name) {
       img.removeAttribute('src');
       img.style.display = 'none';
       return;
     }
     img.style.display = '';
-    // cache-bust so updates show after refresh
-    img.src = apiUrl(`static/${name}?v=${encodeURIComponent(CFG.version || '3')}`);
+    const src = url
+      ? apiUrl(String(url).replace(/^\//, '') + (String(url).includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(CFG.version || '320'))
+      : apiUrl(`static/${name}?v=${encodeURIComponent(CFG.version || '320')}`);
+    img.src = src;
     img.onerror = () => { img.style.display = 'none'; };
+  }
+
+  async function restoreWindowSession() {
+    let list;
+    try { list = JSON.parse(localStorage.getItem(SESSION_KEY) || '[]'); } catch { list = []; }
+    if (!Array.isArray(list) || !list.length) return;
+    sessionRestoring = true;
+    const openers = {
+      files: () => openFiles(),
+      trash: () => openTrash(),
+      system: () => openSystem(),
+      settings: () => openSettings(),
+      processes: () => openProcesses(),
+      programs: () => openPrograms(),
+      docker: () => openDocker(),
+      services: () => openServices(),
+      network: () => openNetwork(),
+      logs: () => openLogs(),
+      launcher: () => openLauncher(),
+      notes: () => openNotes(),
+      calc: () => openCalc(),
+      browser: (s) => openBrowser(s.url || undefined),
+      terminal: () => openTerminal(),
+    };
+    for (const s of list.slice(0, 12)) {
+      const app = s.app || s.id;
+      const base = String(app).split(':')[0];
+      try {
+        if (openers[base]) openers[base](s);
+        else if (String(app).startsWith('app:') || String(app).startsWith('web:')) {
+          // skip bookmark restores without enough meta
+          if (s.url) openWebApp({ id: s.id || `web:${s.url}`, title: s.title || 'App', icon: s.icon || '🌐', url: s.url, externalUrl: s.url });
+        }
+      } catch { /* */ }
+      const rec = windows.get(s.id) || [...windows.entries()].map((x) => x[1]).find((r) => (r.session?.app || r.kind) === app);
+      if (rec?.el) {
+        if (s.left) rec.el.style.left = s.left;
+        if (s.top) rec.el.style.top = s.top;
+        if (s.width) rec.el.style.width = s.width;
+        if (s.height) rec.el.style.height = s.height;
+        if (s.minimized) {
+          rec.el.classList.add('minimized');
+          rec.task?.classList.remove('active');
+        }
+      }
+    }
+    sessionRestoring = false;
+    scheduleSessionSave();
   }
 
   /* ── Init ───────────────────────────────────────────────────────────── */
@@ -2539,11 +3317,13 @@
       CFG = await api('api/config');
       document.title = `${CFG.title || 'Fox OS'} — ${CFG.hostname || ''}`;
       $('#trayHost').textContent = CFG.hostname || '';
+      applyDesktopAppearance();
       applyWallpaper();
       renderDesktopIcons();
       renderStartMenu();
       refreshTrayAndWidgets();
       trayTimer = setInterval(refreshTrayAndWidgets, 4000);
+      setTimeout(() => restoreWindowSession(), 600);
     } catch (e) {
       console.error(e);
       $('#boot .boot-sub').textContent = 'Failed to load: ' + e.message;

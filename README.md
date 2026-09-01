@@ -14,7 +14,7 @@ Inspired by Cockpit, CasaOS, and classic File Explorer.
 
 | App | Description |
 |-----|-------------|
-| **File Explorer** | Windows-style browser with This PC / Network, multi-root jails, folder filter, context menus |
+| **File Explorer** | This PC / Network, multi-select, DnD copy/move, cut/copy/paste, zip download, multi-root jails |
 | **System** | Live CPU %, RAM, swap, load, temp (if available), disks |
 | **Programs** | FreeDesktop `.desktop` apps, PATH tools, Docker containers, config links |
 | **Processes** | Top processes by memory |
@@ -25,7 +25,9 @@ Inspired by Cockpit, CasaOS, and classic File Explorer.
 | **Launcher** | Bookmark tiles from config |
 | **Notes / Calculator** | Desktop utilities |
 | **Recycle Bin** | Soft-delete trash with restore / empty; size & age caps (`trash_max_mb`, `trash_max_age_days`) |
-| **Desktop chrome** | Resizable windows, snap left/right, Start search, Ctrl+Tab cycle, tray meters, sticky icon positions |
+| **Browser** | In-desktop iframe browser (address bar + nav); optional server Chromium via `allow_system_browser` |
+| **Terminal** | Wetty / embed passthrough (`terminal_embed` / `terminal_url`) |
+| **Desktop chrome** | Resizable windows, snap, Start search, taskbar previews/grouping, session restore, wallpaper Settings |
 
 Safety first: path jail under configured roots, optional writes, **no arbitrary command execution** from the web UI. Service/Docker controls (when enabled) use fixed argv + strict allowlists only.
 
@@ -86,6 +88,11 @@ Copy from `config.example.json`. Important keys:
 | `trash_max_mb` | Cap trash storage in megabytes (default `1024`; `0` = unlimited) |
 | `trash_max_age_days` | Auto-purge trash older than N days (default `30`; `0` = unlimited) |
 | `trash_max_items` | Max trash entries before oldest are dropped (default `200`) |
+| `allow_system_browser` | Allow `POST /api/browser/open` to launch Chromium on the **server** display (default **`false`**) |
+| `terminal_embed` | `embed_map` key for the Terminal app (e.g. `"wetty"`) |
+| `terminal_url` | Optional direct terminal URL (also resolved through `embed_map` when possible) |
+
+Appearance overlays (wallpaper choice, widgets, icon size, accent) live in **`data/desktop.json`** (gitignored) and merge into `/api/config` — they do not rewrite `config.json`.
 
 **Machine-specific** data (your paths, hostnames, personal wallpaper) stays in `config.json` and is **gitignored**.
 
@@ -188,20 +195,31 @@ Restart Fox OS after changing these flags. Prefer reverse-proxy auth before turn
 | `/api/docker/control` | POST start/stop/restart (opt-in) |
 | `/api/network` | interfaces / listeners |
 | `/api/logs` | journalctl |
-| `/api/files*` | jails file browser (delete soft-trashes by default) |
+| `/api/files*` | jails file browser (delete soft-trashes by default; copy/move/zip/bulk-delete) |
 | `/api/trash*` | Recycle Bin list / restore / permanent delete / empty |
 | `/api/places` | This PC / Network places |
 | `/api/notes` | sticky notes store |
+| `/api/desktop` | GET/POST appearance overlay (`data/desktop.json`) |
+| `/api/wallpaper*` | list / upload / select / reset / file |
+| `/api/browser/open` | POST opt-in system Chromium (fixed argv) |
 
 ## Wallpaper
 
-- Drop `static/wallpaper.png` (or set `wallpaper` in config)
+- Default: drop `static/wallpaper.png` (or set `wallpaper` in config)
+- **Settings → Wallpaper**: upload png/jpg/webp/svg into `data/wallpapers/`, select, or reset
+- Preference stored in `data/desktop.json` (overlay); apply without editing `config.json`
 - Display uses **`object-fit: cover`** + **center** — no stretch/squash
-- Repo ships `static/wallpaper.default.svg` as a generic fallback you can copy
+- Repo ships `static/wallpaper.default.svg` as a generic fallback
 
 ```bash
 cp static/wallpaper.default.svg static/wallpaper.png   # or use your own PNG/JPG
 ```
+
+## Browser & Terminal
+
+- **Browser** app embeds pages in an iframe. Sites that send `X-Frame-Options` / CSP `frame-ancestors` show a friendly fallback with **Open externally**.
+- **System Chromium** (optional): set `"allow_system_browser": true` in private `config.json`. Fox OS resolves `chromium` / `chromium-browser` / `google-chrome` via `PATH` and runs fixed argv `--new-window <url>`. Useful on a Pi kiosk **server display**; remote users should use the iframe Browser.
+- **Terminal** app: set `"terminal_embed": "wetty"` and map your host in `embed_map` (e.g. `"wetty.home": "wetty"`), or set `terminal_url`. Fox OS does not store SSH passwords.
 
 ## Security notes
 
@@ -211,6 +229,7 @@ cp static/wallpaper.default.svg static/wallpaper.png   # or use your own PNG/JPG
 - Do not expose write-enabled (or control-enabled) Fox OS to the public internet without auth
 - File APIs reject path traversal outside configured roots
 - Control APIs reject unknown units/containers and never run arbitrary shell
+- `allow_system_browser` stays false unless you intend kiosk Chromium on the server display
 
 ## Reverse proxy (nginx sketch)
 

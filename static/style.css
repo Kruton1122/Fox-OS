@@ -1056,3 +1056,108 @@ html, body {
 .trash-body { flex: 1; min-height: 0; overflow: auto; background: #fff; }
 .trash-table td code { font-size: 11px; }
 
+
+
+/* ── v3.2.0 extras ─────────────────────────────────────────────────────── */
+:root { --accent: var(--title); }
+
+.task-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 160px;
+}
+.task-tab-ico { flex: 0 0 auto; }
+.task-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-tab-count {
+  flex: 0 0 auto;
+  background: #000080;
+  color: #fff;
+  font-size: 10px;
+  border-radius: 8px;
+  padding: 0 5px;
+  line-height: 14px;
+  min-width: 14px;
+  text-align: center;
+}
+.task-preview {
+  position: fixed;
+  z-index: 10000;
+  background: #ffffe1;
+  border: 1px solid #000;
+  box-shadow: 2px 2px 0 #00000055;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 280px;
+  font-size: 12px;
+  pointer-events: none;
+}
+.task-preview-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.exp-icon-item.dragging, .exp-table tr.dragging { opacity: 0.55; }
+.exp-icon-item.drop-target, .exp-table tr.drop-target,
+.file-list.drop-target {
+  outline: 2px dashed #000080;
+  outline-offset: -2px;
+  background: #cce4f733;
+}
+
+.settings-rich { max-width: 640px; max-height: 100%; overflow: auto; }
+.settings-section {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #a0a0a0;
+}
+.settings-section h3 { margin: 0 0 8px; font-size: 13px; }
+.settings-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+.settings-check { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 6px 0; }
+.settings-section label { display: block; font-size: 13px; margin: 6px 0; }
+.settings-section select, .settings-section input[type="color"] { margin-left: 6px; }
+.btn-like, .settings-row .exp-upload {
+  display: inline-block;
+  padding: 3px 10px;
+  background: var(--panel);
+  border: 2px outset var(--panel-hi);
+  font-size: 12px;
+  cursor: pointer;
+}
+.wp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.wp-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 2px solid transparent;
+  background: #ddd;
+  cursor: pointer;
+  font-size: 11px;
+  text-align: center;
+}
+.wp-thumb img {
+  width: 100%;
+  height: 64px;
+  object-fit: cover;
+  background: #333;
+}
+.wp-thumb.current { border-color: #000080; background: #cce4f7; }
+.wp-thumb:hover { border-color: #1084d0; }
+
+.browser-app .webapp-url { flex: 1; min-width: 0; }
+
+html[data-icon-size="sm"] .desk-icon .ico { font-size: 22px; }
+html[data-icon-size="sm"] .desk-icon { width: 64px; }
+html[data-icon-size="lg"] .desk-icon .ico { font-size: 40px; }
+html[data-icon-size="lg"] .desk-icon { width: 96px; }
+
+.desk-widgets.hidden { display: none !important; }

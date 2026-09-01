@@ -2,6 +2,8 @@
 config.json
 foxos.service
 data/notes.json
+data/desktop.json
+data/wallpapers/
 data/*.db
 __pycache__/
 *.py[cod]

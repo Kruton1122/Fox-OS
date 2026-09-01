@@ -27,6 +27,9 @@
   "discover_docker": true,
   "allow_service_control": false,
   "allow_docker_control": false,
+  "allow_system_browser": false,
+  "terminal_embed": "wetty",
+  "terminal_url": "",
   "apps": [],
   "links": [
     {
@@ -41,6 +44,7 @@
     { "id": "qa-home", "label": "Home", "root": "home", "path": "", "icon": "🏠" }
   ],
   "embed_map": {
-    "myapp.local": "myapp"
+    "myapp.local": "myapp",
+    "wetty.home": "wetty"
   }
 }
