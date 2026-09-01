@@ -51,6 +51,12 @@ async def _pty_session(websocket: Any, allow_check: Callable[[], bool]) -> None:
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
     env.setdefault("COLORTERM", "truecolor")
+    # Do not inherit Fox OS service WorkingDirectory (/home/pi/foxos).
+    home = os.environ.get("HOME") or os.path.expanduser("~") or "/tmp"
+    if not os.path.isdir(home):
+        home = "/tmp"
+    env["HOME"] = home
+    env["PWD"] = home
 
     master, slave = pty.openpty()
     _set_winsize(master, 24, 80)
@@ -69,7 +75,14 @@ async def _pty_session(websocket: Any, allow_check: Callable[[], bool]) -> None:
             os.dup2(slave, 2)
             if slave > 2:
                 os.close(slave)
+            try:
+                os.chdir(home)
+            except OSError:
+                pass
             argv = _shell_argv()
+            # Login shell so profile/bashrc behave like a normal session from $HOME
+            if argv and argv[0].endswith("bash"):
+                argv = [argv[0], "-l"]
             os.execvpe(argv[0], argv, env)
         except Exception:
             os._exit(127)
