@@ -8,6 +8,8 @@ Inspired by Cockpit, CasaOS, and classic File Explorer.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
+[Changelog](CHANGELOG.md) · [Releases](https://github.com/Kruton1122/Fox-OS/releases)
+
 ## Features
 
 | App | Description |
