@@ -12,14 +12,18 @@ import shutil
 import socket
 import subprocess
 import threading
+import re
+import tempfile
 import uuid
 import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, abort, after_this_request, jsonify, request, send_file, send_from_directory
 
-VERSION = "3.1.1"
+VERSION = "3.2.0"
 
 NETWORK_FS = frozenset({
     "cifs", "smb3", "smb2", "nfs", "nfs4", "fuse.sshfs", "fuse.rclone",
@@ -32,9 +36,14 @@ EXAMPLE_CONFIG = ROOT / "config.example.json"
 STATIC = ROOT / "static"
 DATA = ROOT / "data"
 NOTES_PATH = DATA / "notes.json"
+DESKTOP_PATH = DATA / "desktop.json"
+WALLPAPERS_DIR = DATA / "wallpapers"
 TRASH_DIR = DATA / "trash"
 TRASH_FILES = TRASH_DIR / "files"
 TRASH_MANIFEST = TRASH_DIR / "manifest.json"
+
+WALLPAPER_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp", ".svg"})
+BROWSER_BINS = ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable")
 
 app = Flask(__name__, static_folder=str(STATIC), static_url_path="/static")
 
@@ -75,6 +84,15 @@ def _default_config() -> dict:
         "trash_max_items": 200,
         "trash_max_mb": 1024,
         "trash_max_age_days": 30,
+        # Opt-in: launch system Chromium on the *server* display (kiosk). Default false.
+        "allow_system_browser": False,
+        # Opt-in: in-app PTY terminal (xterm.js ↔ WebSocket). Default false — shell as Fox OS user.
+        "allow_terminal": False,
+        # Side WebSocket listener (Waitress cannot do WS). Bound to 127.0.0.1 only.
+        "terminal_ws_port": 8766,
+        # Deprecated (v3.2.0 Wetty plan): ignored by Terminal app; kept for config compatibility.
+        "terminal_embed": "",
+        "terminal_url": "",
     }
 
 
@@ -98,6 +116,7 @@ def load_config() -> dict:
 
 CFG = load_config()
 DATA.mkdir(parents=True, exist_ok=True)
+WALLPAPERS_DIR.mkdir(parents=True, exist_ok=True)
 TRASH_DIR.mkdir(parents=True, exist_ok=True)
 TRASH_FILES.mkdir(parents=True, exist_ok=True)
 
@@ -141,6 +160,200 @@ def write_allowed(root_id: str) -> bool:
     if ephemeral:
         return False
     return root_id in set(CFG.get("write_roots") or [])
+
+
+
+def _default_desktop() -> dict:
+    return {
+        "wallpaper": None,  # None = use CFG wallpaper / static fallback
+        "wallpaper_source": "static",  # static | data
+        "show_widgets": True,
+        "icon_size": "md",  # sm | md | lg
+        "accent": "",  # optional CSS color for titlebar accent
+    }
+
+
+_DESKTOP_LOCK = threading.Lock()
+
+
+def load_desktop() -> dict:
+    base = _default_desktop()
+    if not DESKTOP_PATH.exists():
+        return dict(base)
+    try:
+        with open(DESKTOP_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return dict(base)
+    except (OSError, json.JSONDecodeError):
+        return dict(base)
+    out = dict(base)
+    for k, v in data.items():
+        if k in base or k in ("wallpaper", "wallpaper_source", "show_widgets", "icon_size", "accent"):
+            out[k] = v
+    return out
+
+
+def save_desktop(data: dict) -> dict:
+    cur = load_desktop()
+    for k, v in data.items():
+        if k in ("wallpaper", "wallpaper_source", "show_widgets", "icon_size", "accent"):
+            cur[k] = v
+    with _DESKTOP_LOCK:
+        DESKTOP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = DESKTOP_PATH.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cur, f, indent=2)
+            f.write("\n")
+        tmp.replace(DESKTOP_PATH)
+    return cur
+
+
+def _safe_wallpaper_name(name: str) -> str:
+    name = (name or "").strip().replace("\\", "/").split("/")[-1]
+    if not name or name in (".", "..") or ".." in name:
+        raise ValueError("bad wallpaper name")
+    if Path(name).suffix.lower() not in WALLPAPER_EXT:
+        raise ValueError("unsupported wallpaper type")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", name):
+        raise ValueError("bad wallpaper name")
+    return name
+
+
+def resolve_wallpaper() -> dict:
+    """Return current wallpaper metadata for the UI."""
+    desk = load_desktop()
+    wp = desk.get("wallpaper")
+    src = desk.get("wallpaper_source") or "static"
+    if wp and src == "data":
+        try:
+            name = _safe_wallpaper_name(str(wp))
+            path = (WALLPAPERS_DIR / name).resolve()
+            path.relative_to(WALLPAPERS_DIR.resolve())
+            if path.is_file():
+                return {
+                    "name": name,
+                    "source": "data",
+                    "url": f"/api/wallpaper/file?source=data&name={name}",
+                }
+        except ValueError:
+            pass
+    # static: desktop override or CFG
+    name = None
+    if wp and src == "static":
+        name = str(wp)
+    if not name:
+        name = CFG.get("wallpaper") or "wallpaper.png"
+    # sanitize to basename under STATIC
+    name = Path(str(name)).name
+    wp_path = STATIC / name
+    if not wp_path.is_file():
+        for cand in ("wallpaper.png", "wallpaper.jpg", "wallpaper.webp", "wallpaper.default.svg"):
+            if (STATIC / cand).is_file():
+                name = cand
+                break
+        else:
+            return {"name": None, "source": "static", "url": None}
+    return {
+        "name": name,
+        "source": "static",
+        "url": f"/api/wallpaper/file?source=static&name={name}",
+    }
+
+
+def _unique_child(dest_dir: Path, preferred_name: str) -> Path:
+    candidate = dest_dir / preferred_name
+    if not candidate.exists():
+        return candidate
+    stem = Path(preferred_name).stem
+    suffix = Path(preferred_name).suffix
+    for i in range(1, 1000):
+        alt = dest_dir / f"{stem} ({i}){suffix}"
+        if not alt.exists():
+            return alt
+    raise OSError("could not find unique name")
+
+
+def copy_path_safe(src_root: str, src_rel: str, dest_root: str, dest_dir_rel: str) -> dict:
+    if not write_allowed(dest_root):
+        raise PermissionError("destination read-only")
+    src = resolve_safe(src_root, src_rel)
+    dest_dir = resolve_safe(dest_root, dest_dir_rel or "")
+    if not src.exists():
+        raise FileNotFoundError("source missing")
+    if src_rel in ("", ".", None):
+        raise ValueError("cannot copy root")
+    if not dest_dir.is_dir():
+        raise ValueError("destination not a directory")
+    # prevent copying a directory into itself
+    if src.is_dir():
+        try:
+            dest_dir.resolve().relative_to(src.resolve())
+            raise ValueError("cannot copy folder into itself")
+        except ValueError as e:
+            if "into itself" in str(e):
+                raise
+    dest = _unique_child(dest_dir, src.name)
+    # ensure dest stays in jail
+    resolve_safe(dest_root, str(dest.relative_to(roots_map()[dest_root])).replace("\\", "/"))
+    if src.is_dir():
+        shutil.copytree(src, dest, dirs_exist_ok=False)
+    else:
+        shutil.copy2(src, dest)
+    out_rel = str(dest.relative_to(roots_map()[dest_root])).replace("\\", "/")
+    return {"ok": True, "root": dest_root, "path": out_rel, "name": dest.name}
+
+
+def move_path_safe(src_root: str, src_rel: str, dest_root: str, dest_dir_rel: str) -> dict:
+    if not write_allowed(src_root):
+        raise PermissionError("source read-only")
+    if not write_allowed(dest_root):
+        raise PermissionError("destination read-only")
+    src = resolve_safe(src_root, src_rel)
+    dest_dir = resolve_safe(dest_root, dest_dir_rel or "")
+    if not src.exists():
+        raise FileNotFoundError("source missing")
+    if src_rel in ("", ".", None):
+        raise ValueError("cannot move root")
+    if src == roots_map()[src_root]:
+        raise ValueError("cannot move root")
+    if not dest_dir.is_dir():
+        raise ValueError("destination not a directory")
+    if src.is_dir():
+        try:
+            dest_dir.resolve().relative_to(src.resolve())
+            raise ValueError("cannot move folder into itself")
+        except ValueError as e:
+            if "into itself" in str(e):
+                raise
+    dest = _unique_child(dest_dir, src.name)
+    resolve_safe(dest_root, str(dest.relative_to(roots_map()[dest_root])).replace("\\", "/"))
+    shutil.move(str(src), str(dest))
+    out_rel = str(dest.relative_to(roots_map()[dest_root])).replace("\\", "/")
+    return {"ok": True, "root": dest_root, "path": out_rel, "name": dest.name}
+
+
+def _sanitize_http_url(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        raise ValueError("url required")
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("only http(s) URLs allowed")
+    if not parsed.netloc:
+        raise ValueError("bad url")
+    # Rebuild without credentials / fragment noise for argv safety
+    path = parsed.path or "/"
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{parsed.scheme}://{parsed.netloc}{path}{query}"
+
+
+def _find_system_browser() -> str | None:
+    for name in BROWSER_BINS:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
 
 
 def _prune_ephemeral() -> None:
@@ -435,6 +648,8 @@ def _builtin_apps() -> list[dict]:
         {"id": "launcher", "label": "Launcher", "action": "launcher", "icon": "🚀", "desc": "Bookmarked links"},
         {"id": "notes", "label": "Notes", "action": "notes", "icon": "📝", "desc": "Sticky notes"},
         {"id": "calc", "label": "Calculator", "action": "calc", "icon": "🔢", "desc": "Quick math"},
+        {"id": "browser", "label": "Browser", "action": "browser", "icon": "🌐", "desc": "Browse the web in Fox OS"},
+        {"id": "terminal", "label": "Terminal", "action": "terminal", "icon": "⌨", "desc": "PTY shell (xterm.js; allow_terminal)"},
         {"id": "settings", "label": "Settings", "action": "settings", "icon": "🔧", "desc": "Fox OS options"},
     ]
 
@@ -807,15 +1022,8 @@ def health():
 @app.get("/api/config")
 def api_config():
     roots = [_place_from_root(r) for r in CFG.get("roots", [])]
-    wallpaper = CFG.get("wallpaper") or "wallpaper.png"
-    wp_path = STATIC / wallpaper
-    if not wp_path.is_file():
-        for cand in ("wallpaper.png", "wallpaper.jpg", "wallpaper.webp", "wallpaper.default.svg"):
-            if (STATIC / cand).is_file():
-                wallpaper = cand
-                break
-        else:
-            wallpaper = None
+    desk = load_desktop()
+    wp = resolve_wallpaper()
     return jsonify({
         "title": CFG.get("title", "Fox OS"),
         "version": VERSION,
@@ -825,8 +1033,23 @@ def api_config():
         "links": CFG.get("links", []),
         "quick_access": CFG.get("quick_access", []),
         "embed_map": CFG.get("embed_map") or {},
-        "wallpaper": wallpaper,
+        "wallpaper": wp.get("name"),
+        "wallpaper_url": wp.get("url"),
+        "wallpaper_source": wp.get("source"),
+        "desktop": {
+            "show_widgets": bool(desk.get("show_widgets", True)),
+            "icon_size": desk.get("icon_size") or "md",
+            "accent": desk.get("accent") or "",
+        },
         "allow_write": CFG.get("allow_write", False),
+        "allow_system_browser": bool(CFG.get("allow_system_browser", False)),
+        "system_browser_available": _find_system_browser() is not None,
+        "allow_terminal": bool(CFG.get("allow_terminal", False)),
+        "terminal_ws_port": int(CFG.get("terminal_ws_port") or 8766),
+        "terminal_ws_path": "/ws/terminal",
+        # Deprecated Wetty keys (Terminal app ignores; still echoed for older UIs)
+        "terminal_embed": CFG.get("terminal_embed") or "",
+        "terminal_url": CFG.get("terminal_url") or "",
         "user": pwd.getpwuid(os.getuid()).pw_name,
         "hostname": socket.gethostname(),
         "features": {
@@ -837,6 +1060,14 @@ def api_config():
             "service_control": bool(CFG.get("allow_service_control", False)),
             "docker_control": bool(CFG.get("allow_docker_control", False)),
             "trash": trash_enabled(),
+            "system_browser": bool(CFG.get("allow_system_browser", False)),
+            "terminal": bool(CFG.get("allow_terminal", False)),
+        },
+        "trash_caps": {
+            "max_items": _trash_max_items(),
+            "max_mb": CFG.get("trash_max_mb", 1024),
+            "max_age_days": CFG.get("trash_max_age_days", 30),
+            "enabled": trash_enabled(),
         },
     })
 
@@ -1804,6 +2035,361 @@ def api_upload():
     return jsonify({"ok": True, "name": name})
 
 
+
+
+@app.get("/api/desktop")
+def api_desktop_get():
+    desk = load_desktop()
+    wp = resolve_wallpaper()
+    return jsonify({"ok": True, "desktop": desk, "wallpaper": wp})
+
+
+@app.post("/api/desktop")
+def api_desktop_set():
+    """Update appearance overlay in data/desktop.json (never whole config.json)."""
+    body = request.get_json(force=True, silent=True) or {}
+    patch = {}
+    if "show_widgets" in body:
+        patch["show_widgets"] = bool(body.get("show_widgets"))
+    if "icon_size" in body:
+        size = str(body.get("icon_size") or "md").lower()
+        if size not in ("sm", "md", "lg"):
+            return jsonify({"error": "icon_size must be sm|md|lg"}), 400
+        patch["icon_size"] = size
+    if "accent" in body:
+        accent = str(body.get("accent") or "").strip()
+        if accent and not re.fullmatch(r"#[0-9A-Fa-f]{3,8}", accent):
+            return jsonify({"error": "accent must be #hex"}), 400
+        patch["accent"] = accent
+    if not patch:
+        return jsonify({"error": "no fields"}), 400
+    desk = save_desktop(patch)
+    return jsonify({"ok": True, "desktop": desk, "wallpaper": resolve_wallpaper()})
+
+
+@app.get("/api/wallpaper/list")
+def api_wallpaper_list():
+    items = []
+    for cand in ("wallpaper.default.svg", "wallpaper.png", "wallpaper.jpg", "wallpaper.webp"):
+        path = STATIC / cand
+        if path.is_file():
+            items.append({
+                "name": cand,
+                "source": "static",
+                "label": cand,
+                "url": f"/api/wallpaper/file?source=static&name={cand}",
+                "current": False,
+            })
+    try:
+        for path in sorted(WALLPAPERS_DIR.iterdir(), key=lambda p: p.name.lower()):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in WALLPAPER_EXT:
+                continue
+            try:
+                name = _safe_wallpaper_name(path.name)
+            except ValueError:
+                continue
+            items.append({
+                "name": name,
+                "source": "data",
+                "label": name,
+                "url": f"/api/wallpaper/file?source=data&name={name}",
+                "current": False,
+            })
+    except OSError:
+        pass
+    cur = resolve_wallpaper()
+    for it in items:
+        if it["name"] == cur.get("name") and it["source"] == cur.get("source"):
+            it["current"] = True
+    return jsonify({"items": items, "current": cur})
+
+
+@app.get("/api/wallpaper/file")
+def api_wallpaper_file():
+    source = (request.args.get("source") or "static").strip()
+    try:
+        name = _safe_wallpaper_name(request.args.get("name") or "")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if source == "data":
+        path = (WALLPAPERS_DIR / name).resolve()
+        try:
+            path.relative_to(WALLPAPERS_DIR.resolve())
+        except ValueError:
+            abort(400)
+    else:
+        path = (STATIC / name).resolve()
+        try:
+            path.relative_to(STATIC.resolve())
+        except ValueError:
+            abort(400)
+    if not path.is_file():
+        abort(404)
+    return send_file(path)
+
+
+@app.post("/api/wallpaper/upload")
+def api_wallpaper_upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "file required"}), 400
+    try:
+        name = _safe_wallpaper_name(Path(f.filename).name)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    WALLPAPERS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = WALLPAPERS_DIR / name
+    # avoid overwrite collisions
+    if dest.exists():
+        stem, suf = dest.stem, dest.suffix
+        for i in range(1, 1000):
+            alt = WALLPAPERS_DIR / f"{stem}-{i}{suf}"
+            if not alt.exists():
+                dest = alt
+                name = dest.name
+                break
+    try:
+        f.save(str(dest))
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    desk = save_desktop({"wallpaper": name, "wallpaper_source": "data"})
+    wp = resolve_wallpaper()
+    return jsonify({"ok": True, "desktop": desk, "wallpaper": wp})
+
+
+@app.post("/api/wallpaper/select")
+def api_wallpaper_select():
+    body = request.get_json(force=True, silent=True) or {}
+    source = (body.get("source") or "static").strip()
+    try:
+        name = _safe_wallpaper_name(body.get("name") or "")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if source == "data":
+        path = WALLPAPERS_DIR / name
+    else:
+        source = "static"
+        path = STATIC / name
+    if not path.is_file():
+        return jsonify({"error": "not found"}), 404
+    desk = save_desktop({"wallpaper": name, "wallpaper_source": source})
+    return jsonify({"ok": True, "desktop": desk, "wallpaper": resolve_wallpaper()})
+
+
+@app.post("/api/wallpaper/reset")
+def api_wallpaper_reset():
+    """Clear desktop wallpaper override → fall back to config/static default."""
+    desk = save_desktop({"wallpaper": None, "wallpaper_source": "static"})
+    return jsonify({"ok": True, "desktop": desk, "wallpaper": resolve_wallpaper()})
+
+
+@app.post("/api/files/copy")
+def api_files_copy():
+    body = request.get_json(force=True, silent=True) or {}
+    items = body.get("items")
+    if not items:
+        items = [{
+            "root": body.get("src_root") or body.get("root"),
+            "path": body.get("src_path") or body.get("path"),
+        }]
+    dest_root = body.get("dest_root") or body.get("root")
+    dest_path = body.get("dest_path") if "dest_path" in body else body.get("dest") or ""
+    if not dest_root:
+        return jsonify({"error": "dest_root required"}), 400
+    results = []
+    errors = []
+    for it in items:
+        try:
+            src_root = it.get("root") or body.get("src_root")
+            src_path = it.get("path") or ""
+            if not src_root or not src_path:
+                raise ValueError("src root/path required")
+            results.append(copy_path_safe(src_root, src_path, dest_root, dest_path or ""))
+        except PermissionError as e:
+            errors.append(str(e))
+        except (ValueError, FileNotFoundError, OSError) as e:
+            errors.append(str(e))
+    if not results and errors:
+        return jsonify({"error": errors[0], "errors": errors}), 400
+    return jsonify({"ok": True, "results": results, "errors": errors})
+
+
+@app.post("/api/files/move")
+def api_files_move():
+    body = request.get_json(force=True, silent=True) or {}
+    items = body.get("items")
+    if not items:
+        items = [{
+            "root": body.get("src_root") or body.get("root"),
+            "path": body.get("src_path") or body.get("path"),
+        }]
+    dest_root = body.get("dest_root") or body.get("root")
+    dest_path = body.get("dest_path") if "dest_path" in body else body.get("dest") or ""
+    if not dest_root:
+        return jsonify({"error": "dest_root required"}), 400
+    results = []
+    errors = []
+    for it in items:
+        try:
+            src_root = it.get("root") or body.get("src_root")
+            src_path = it.get("path") or ""
+            if not src_root or not src_path:
+                raise ValueError("src root/path required")
+            results.append(move_path_safe(src_root, src_path, dest_root, dest_path or ""))
+        except PermissionError as e:
+            errors.append(str(e))
+        except (ValueError, FileNotFoundError, OSError) as e:
+            errors.append(str(e))
+    if not results and errors:
+        return jsonify({"error": errors[0], "errors": errors}), 400
+    return jsonify({"ok": True, "results": results, "errors": errors})
+
+
+@app.post("/api/files/delete-bulk")
+def api_files_delete_bulk():
+    body = request.get_json(force=True, silent=True) or {}
+    root_id = body.get("root") or CFG.get("default_root", "home")
+    paths = body.get("paths") or []
+    permanent = bool(body.get("permanent"))
+    if not isinstance(paths, list) or not paths:
+        return jsonify({"error": "paths required"}), 400
+    if not write_allowed(root_id):
+        return jsonify({"error": "read-only root"}), 403
+    results = []
+    errors = []
+    for rel in paths:
+        rel = (rel or "").strip()
+        if not rel:
+            errors.append("empty path")
+            continue
+        try:
+            if permanent or not trash_enabled():
+                hard_delete_path(root_id, rel)
+                results.append({"path": rel, "trashed": False})
+            else:
+                entry = soft_delete_to_trash(root_id, rel)
+                results.append({"path": rel, "trashed": True, "item": entry})
+        except Exception as e:
+            errors.append(f"{rel}: {e}")
+    if not results and errors:
+        return jsonify({"error": errors[0], "errors": errors}), 400
+    return jsonify({"ok": True, "results": results, "errors": errors})
+
+
+@app.post("/api/files/zip")
+def api_files_zip():
+    """Zip selected files (same root) and download. Paths validated via resolve_safe."""
+    body = request.get_json(force=True, silent=True) or {}
+    root_id = body.get("root") or CFG.get("default_root", "home")
+    paths = body.get("paths") or []
+    if not isinstance(paths, list) or not paths:
+        return jsonify({"error": "paths required"}), 400
+    if len(paths) > 100:
+        return jsonify({"error": "too many files (max 100)"}), 400
+    base = roots_map().get(root_id)
+    if not base:
+        return jsonify({"error": "unknown root"}), 400
+    resolved = []
+    for rel in paths:
+        try:
+            path = resolve_safe(root_id, rel or "")
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        if not path.exists():
+            return jsonify({"error": f"not found: {rel}"}), 404
+        if path.is_dir():
+            return jsonify({"error": "zip of folders not supported — pick files"}), 400
+        if path.stat().st_size > 200 * 1024 * 1024:
+            return jsonify({"error": f"file too large to zip: {path.name}"}), 413
+        resolved.append(path)
+    tmp = tempfile.NamedTemporaryFile(prefix="foxos-zip-", suffix=".zip", delete=False)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for path in resolved:
+                arc = path.name
+                # disambiguate duplicate basenames
+                if arc in zf.namelist():
+                    arc = f"{path.stem}-{uuid.uuid4().hex[:6]}{path.suffix}"
+                zf.write(path, arcname=arc)
+        @after_this_request
+        def _cleanup(resp):
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return resp
+        return send_file(
+            tmp_path,
+            as_attachment=True,
+            download_name="foxos-files.zip",
+            mimetype="application/zip",
+        )
+    except OSError as e:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+@app.get("/api/terminal")
+def api_terminal_status():
+    """Terminal enablement + WS proxy hints. 403 when allow_terminal is false."""
+    if not CFG.get("allow_terminal", False):
+        return jsonify({
+            "error": "terminal disabled (allow_terminal=false)",
+            "hint": "Set allow_terminal=true in config.json and restart Fox OS. "
+                    "Proxy /ws/terminal to 127.0.0.1:<terminal_ws_port> (WebSocket upgrade).",
+            "allow_terminal": False,
+        }), 403
+    port = int(CFG.get("terminal_ws_port") or 8766)
+    return jsonify({
+        "ok": True,
+        "allow_terminal": True,
+        "ws_path": "/ws/terminal",
+        "listen": f"127.0.0.1:{port}",
+        "shell": os.environ.get("SHELL") or "/bin/bash",
+        "user": pwd.getpwuid(os.getuid()).pw_name,
+    })
+
+
+@app.post("/api/browser/open")
+def api_browser_open():
+    """Opt-in: open http(s) URL in system Chromium on the server display.
+    Fixed argv only; never shell; never client-supplied argv beyond URL.
+    """
+    if not CFG.get("allow_system_browser", False):
+        return jsonify({"error": "system browser disabled (allow_system_browser=false)"}), 403
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        url = _sanitize_http_url(body.get("url") or "")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    binary = _find_system_browser()
+    if not binary:
+        return jsonify({"error": "no chromium/chrome binary found on PATH"}), 404
+    argv = [binary, "--new-window", url]
+    try:
+        # Detach from request worker; do not wait.
+        subprocess.Popen(
+            argv,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True, "binary": Path(binary).name, "url": url})
+
+
+
 @app.errorhandler(413)
 def _too_large(_err):
     mb = CFG.get("max_upload_mb", 512)
@@ -1815,6 +2401,26 @@ def main():
     port = int(CFG.get("port", 8765))
     threads = int(CFG.get("threads") or 8)
     print(f"Fox OS v{VERSION} on http://{host}:{port} (waitress, threads={threads})")
+
+    # Waitress cannot terminate WebSockets — optional side listener for PTY terminal.
+    if CFG.get("allow_terminal", False):
+        try:
+            from terminal_ws import start_terminal_ws
+            ws_port = int(CFG.get("terminal_ws_port") or 8766)
+            ok = start_terminal_ws(
+                host="127.0.0.1",
+                port=ws_port,
+                allow_check=lambda: bool(CFG.get("allow_terminal", False)),
+            )
+            if ok:
+                print(f"Terminal PTY WebSocket on ws://127.0.0.1:{ws_port} — proxy /ws/terminal → there")
+            else:
+                print("WARNING: allow_terminal=true but terminal WebSocket failed to start (is websockets installed?)")
+        except Exception as e:
+            print(f"WARNING: terminal WebSocket not started: {e}")
+    else:
+        print("Terminal PTY disabled (allow_terminal=false)")
+
     try:
         from waitress import serve
     except ImportError:

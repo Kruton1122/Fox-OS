@@ -4,6 +4,35 @@ All notable changes to Fox OS are documented here.
 
 Format inspired by [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
+## [3.2.0] — 2026-09-01
+
+Desktop plus: Explorer power features, wallpaper & Settings, Browser + Terminal apps.
+
+### Added
+
+- **Explorer multi-select** — Ctrl/Cmd click and Shift click; bulk Move to Recycle Bin / permanent delete; multi-file download zip (`POST /api/files/zip`, `POST /api/files/delete-bulk`). Every path still passes `resolve_safe` / `write_allowed`.
+- **Drag-and-drop** copy/move between Explorer folders (Ctrl/Alt = copy). Server endpoints `POST /api/files/copy` and `POST /api/files/move` with jail checks on both ends.
+- **File clipboard** — Cut / Copy / Paste inside Explorer (internal clipboard; paste uses copy or move APIs).
+- **Taskbar previews / grouping** — hover title preview; click cycles same-app windows when grouped.
+- **Persistent window session** — open windows (id/app/pos/size/url) restored from `localStorage` after refresh.
+- **Wallpaper Settings** — list / upload (png/jpg/webp/svg) / select / reset. Uploads in `data/wallpapers/` (gitignored). Preference overlay in `data/desktop.json` (not whole `config.json`). Served via `/api/wallpaper/*`; merged into `/api/config`.
+- **Appearance** — show widgets, icon size, optional accent/titlebar color (CSS variables) persisted in `data/desktop.json`.
+- **Browser app** — in-Fox-OS window with address bar + nav; friendly message when iframe blocked + Open externally. Opt-in **system Chromium** via `allow_system_browser` (default **false**) and `POST /api/browser/open` (fixed argv, http(s) URL only).
+- **Terminal app** — proper **PTY passthrough** with vendored **xterm.js** (+ fit addon) and a localhost WebSocket side listener (`terminal_ws.py`). Opt-in via `allow_terminal` (default **false**). **Not Wetty** / not an iframe to wetty.home.
+
+### Changed
+
+- Version bumped to **3.2.0**; static asset cache busters (`?v=321` after Terminal PTY patch).
+- Settings expanded beyond read-only feature list (wallpaper, appearance, status, session controls). Service/Docker control flags remain **status-only** in the UI.
+- Terminal plan changed from Wetty embed to in-app PTY; `terminal_embed` / `terminal_url` deprecated.
+- `config.example.json` documents `allow_system_browser`, `allow_terminal`, `terminal_ws_port`.
+
+### Security
+
+- System browser launch never accepts client argv beyond a sanitized http(s) URL; binary resolved via `shutil.which` allowlist; flag default false.
+- Terminal PTY (`allow_terminal`) default **false**; WebSocket listener binds **127.0.0.1 only**; `GET /api/terminal` returns **403** when disabled.
+- File copy/move/zip/bulk-delete validate every path with `resolve_safe`; writes require `write_allowed`.
+
 ## [3.1.1] — 2026-09-01
 
 Desktop polish: Recycle Bin, Start menu search, window snap.
@@ -68,7 +97,8 @@ Initial public release: portable Flask + static web desktop for headless Linux.
 - `config.example.json` template; machine-local `config.json` gitignored.
 - systemd unit example and reverse-proxy notes.
 
-[3.1.1]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.0...HEAD
+[3.2.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.1...HEAD
+[3.1.1]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/Kruton1122/Fox-OS/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/Kruton1122/Fox-OS/releases/tag/v3.0.0
