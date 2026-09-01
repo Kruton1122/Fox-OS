@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, abort, after_this_request, jsonify, request, send_file, send_from_directory
 
-VERSION = "3.2.0"
+VERSION = "3.3.0"
 
 NETWORK_FS = frozenset({
     "cifs", "smb3", "smb2", "nfs", "nfs4", "fuse.sshfs", "fuse.rclone",

@@ -2,11 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#1a3a5c" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Fox OS" />
   <title>Fox OS</title>
-  <link rel="stylesheet" href="static/style.css?v=321" />
-  <link rel="stylesheet" href="static/vendor/xterm/xterm.css?v=321" />
+  <link rel="stylesheet" href="static/style.css?v=330" />
+  <link rel="stylesheet" href="static/vendor/xterm/xterm.css?v=330" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='50' font-size='48'%3E🦊%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
@@ -27,6 +31,23 @@
     <div id="icons" class="desktop-icons"></div>
     <div id="windows" class="windows"></div>
     <div id="snapGuide" class="snap-guide hidden" aria-hidden="true"></div>
+
+    <header id="mobileStatusBar" class="mobile-statusbar" aria-label="Status bar">
+      <span id="mClock" class="m-clock">--:--</span>
+      <span id="mHost" class="m-host"></span>
+      <span class="m-stats">
+        <span id="mCpu" class="m-stat">CPU —</span>
+        <span id="mMem" class="m-stat">RAM —</span>
+      </span>
+    </header>
+
+    <nav id="mobileDock" class="mobile-dock" role="navigation" aria-label="App dock">
+      <button type="button" class="dock-btn" data-dock="home"><span class="dock-ico">🏠</span><span class="dock-lbl">Home</span></button>
+      <button type="button" class="dock-btn" data-dock="files"><span class="dock-ico">📁</span><span class="dock-lbl">Files</span></button>
+      <button type="button" class="dock-btn" data-dock="system"><span class="dock-ico">🖥</span><span class="dock-lbl">System</span></button>
+      <button type="button" class="dock-btn" data-dock="terminal"><span class="dock-ico">⌨</span><span class="dock-lbl">Terminal</span></button>
+      <button type="button" class="dock-btn" data-dock="more"><span class="dock-ico">⋯</span><span class="dock-lbl">More</span></button>
+    </nav>
 
     <footer class="taskbar" role="navigation">
       <button type="button" class="start-btn" id="startBtn" aria-haspopup="true" aria-expanded="false">
@@ -69,8 +90,8 @@
     </div>
   </template>
 
-  <script src="static/vendor/xterm/xterm.min.js?v=321"></script>
-  <script src="static/vendor/xterm/addon-fit.min.js?v=321"></script>
-  <script src="static/app.js?v=321"></script>
+  <script src="static/vendor/xterm/xterm.min.js?v=330"></script>
+  <script src="static/vendor/xterm/addon-fit.min.js?v=330"></script>
+  <script src="static/app.js?v=330"></script>
 </body>
 </html>

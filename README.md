@@ -216,6 +216,20 @@ Restart Fox OS after changing these flags. Prefer reverse-proxy auth before turn
 cp static/wallpaper.default.svg static/wallpaper.png   # or use your own PNG/JPG
 ```
 
+## Mobile
+
+Fox OS switches to an Android/iOS-style launcher shell on phones and tablets — same backend, same APIs, just different chrome.
+
+- **Detection**: `matchMedia('(max-width: 768px), (pointer: coarse)')`, applied as `body.mobile` (and `<html data-layout="mobile">`), re-evaluated on resize/orientation change.
+- **Override**: **Settings → Layout → Layout mode** — Auto-detect / Force mobile / Force desktop, stored client-side in `localStorage` (no `config.json` change, no restart needed).
+- **Home screen**: desktop icons become a full-screen tap-to-open app grid, with a top status bar (clock, hostname, compact CPU/RAM) and a bottom dock (Home, Files, System, Terminal, More).
+- **Apps open as full-screen sheets** (rounded top, docked between the status bar and bottom nav) instead of floating windows — swipe down the title bar, or tap close, to dismiss.
+- **More** opens the same Start menu / search as desktop, restyled as a full-screen drawer.
+- **Home** (long-press or right-click) shows **Recents** — jump back to, or close, open sheets.
+- File Explorer, toolbars, context menus, and Settings get larger touch targets (≥44px), horizontally-scrolling toolbars, and a hidden sidebar/details pane; rows open on a single tap instead of double-click.
+- Respects notches / safe areas via `env(safe-area-inset-*)`; Terminal (xterm.js PTY) and Browser remain fully usable full-screen.
+- Purely a **frontend rebuild of chrome** — no new endpoints, no changes to the path jail, trash, auth model, or `config.json` secrets. Desktop mode (mouse + wide viewport) is unchanged.
+
 ## Browser & Terminal
 
 - **Browser** app embeds pages in an iframe. Sites that send `X-Frame-Options` / CSP `frame-ancestors` show a friendly fallback with **Open externally**.
