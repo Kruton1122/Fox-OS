@@ -188,7 +188,8 @@ Restart Fox OS after changing these flags. Prefer reverse-proxy auth before turn
 | `/api/docker/control` | POST start/stop/restart (opt-in) |
 | `/api/network` | interfaces / listeners |
 | `/api/logs` | journalctl |
-| `/api/files*` | jails file browser |
+| `/api/files*` | jails file browser (delete soft-trashes by default) |
+| `/api/trash*` | Recycle Bin list / restore / permanent delete / empty |
 | `/api/places` | This PC / Network places |
 | `/api/notes` | sticky notes store |
 
