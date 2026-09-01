@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#1a3a5c" />
   <title>Fox OS</title>
-  <link rel="stylesheet" href="static/style.css?v=310" />
+  <link rel="stylesheet" href="static/style.css?v=311" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='50' font-size='48'%3E🦊%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
@@ -25,6 +25,7 @@
     <aside id="widgets" class="desk-widgets" aria-label="Desktop widgets"></aside>
     <div id="icons" class="desktop-icons"></div>
     <div id="windows" class="windows"></div>
+    <div id="snapGuide" class="snap-guide hidden" aria-hidden="true"></div>
 
     <footer class="taskbar" role="navigation">
       <button type="button" class="start-btn" id="startBtn" aria-haspopup="true" aria-expanded="false">
@@ -43,7 +44,12 @@
 
     <div id="startMenu" class="start-menu hidden" role="menu">
       <div class="start-side">Fox<span>OS</span></div>
-      <div class="start-items" id="startItems"></div>
+      <div class="start-main">
+        <div class="start-search-wrap">
+          <input type="search" id="startSearch" class="start-search" placeholder="Search apps & bookmarks…" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="start-items" id="startItems"></div>
+      </div>
     </div>
   </div>
 
@@ -62,6 +68,6 @@
     </div>
   </template>
 
-  <script src="static/app.js?v=310"></script>
+  <script src="static/app.js?v=311"></script>
 </body>
 </html>

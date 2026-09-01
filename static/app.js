@@ -186,33 +186,75 @@
     });
   }
 
-  function renderStartMenu() {
+  function startMenuEntries() {
+    const apps = (CFG?.apps || []).map((a) => ({
+      kind: 'app',
+      id: a.id,
+      label: a.label || a.id,
+      desc: a.desc || '',
+      icon: a.icon || '📦',
+      search: `${a.label || ''} ${a.desc || ''} ${a.id || ''}`.toLowerCase(),
+    }));
+    const links = (CFG?.links || []).map((l) => ({
+      kind: 'link',
+      id: `link:${l.id || l.url}`,
+      label: l.label || l.id || 'Bookmark',
+      desc: l.group ? `Bookmark · ${l.group}` : (l.url || 'Bookmark'),
+      icon: l.icon || '🔗',
+      url: l.url,
+      search: `${l.label || ''} ${l.group || ''} ${l.url || ''} ${l.id || ''}`.toLowerCase(),
+    }));
+    const about = {
+      kind: 'app',
+      id: '__about',
+      label: 'About Fox OS',
+      desc: `Version ${CFG?.version || '2'}`,
+      icon: '🦊',
+      search: `about fox os version ${CFG?.version || ''}`.toLowerCase(),
+    };
+    return [...apps, ...links, about];
+  }
+
+  function renderStartMenu(filterText) {
     const host = $('#startItems');
     if (!host || !CFG) return;
-    const apps = CFG.apps || [];
-    host.innerHTML = apps.map((a) => `
-      <button type="button" class="start-item" data-app="${a.id}" role="menuitem">
-        <span class="ico">${a.icon || '📦'}</span>
+    const q = String(filterText || '').trim().toLowerCase();
+    const entries = startMenuEntries().filter((e) => !q || e.search.includes(q));
+    if (!entries.length) {
+      host.innerHTML = `<div class="start-empty">No matches for “${escapeHtml(q)}”</div>`;
+      return;
+    }
+    host.innerHTML = entries.map((e) => `
+      <button type="button" class="start-item" data-kind="${e.kind}" data-id="${escapeHtml(e.id)}"
+        ${e.url ? `data-url="${escapeHtml(e.url)}"` : ''} role="menuitem">
+        <span class="ico">${e.icon || '📦'}</span>
         <span class="meta">
-          <span class="name">${escapeHtml(a.label)}</span>
-          <span class="desc">${escapeHtml(a.desc || '')}</span>
+          <span class="name">${escapeHtml(e.label)}</span>
+          <span class="desc">${escapeHtml(e.desc || '')}</span>
         </span>
       </button>
-    `).join('') + `
-      <button type="button" class="start-item" data-app="__about" role="menuitem">
-        <span class="ico">🦊</span>
-        <span class="meta">
-          <span class="name">About Fox OS</span>
-          <span class="desc">Version ${escapeHtml(CFG.version || '2')}</span>
-        </span>
-      </button>
-    `;
+    `).join('');
     host.querySelectorAll('.start-item').forEach((btn) => {
       btn.addEventListener('click', () => {
         closeStart();
-        openApp(btn.dataset.app);
+        if (btn.dataset.kind === 'link' && btn.dataset.url) {
+          openWebApp({
+            id: btn.dataset.id,
+            title: btn.querySelector('.name')?.textContent || 'Bookmark',
+            icon: btn.querySelector('.ico')?.textContent || '🔗',
+            url: btn.dataset.url,
+            externalUrl: btn.dataset.url,
+          });
+          return;
+        }
+        openApp(btn.dataset.id);
       });
     });
+  }
+
+  function filterStartMenu() {
+    const input = $('#startSearch');
+    renderStartMenu(input?.value || '');
   }
 
   function toggleStart() {
@@ -221,11 +263,23 @@
     const open = m.classList.toggle('hidden') === false;
     b.classList.toggle('open', open);
     b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      const input = $('#startSearch');
+      if (input) {
+        input.value = '';
+        renderStartMenu('');
+        setTimeout(() => input.focus(), 0);
+      } else {
+        renderStartMenu('');
+      }
+    }
   }
   function closeStart() {
     $('#startMenu')?.classList.add('hidden');
     $('#startBtn')?.classList.remove('open');
     $('#startBtn')?.setAttribute('aria-expanded', 'false');
+    const input = $('#startSearch');
+    if (input) input.value = '';
   }
 
   async function refreshTrayAndWidgets() {
@@ -312,7 +366,7 @@
       }
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'ctx-item';
+      btn.className = 'ctx-item' + (it.danger ? ' ctx-danger' : '');
       btn.textContent = it.label;
       btn.disabled = !!it.disabled;
       btn.addEventListener('click', (e) => {
@@ -353,6 +407,102 @@
     w.el.remove();
     w.task?.remove();
     windows.delete(id);
+  }
+
+
+  const SNAP_EDGE = 28;
+
+  function deskBounds() {
+    const desk = $('#windows');
+    const w = desk?.clientWidth || window.innerWidth;
+    const h = desk?.clientHeight || window.innerHeight;
+    return { w, h };
+  }
+
+  function clearSnapClasses(el) {
+    el.classList.remove('snapped-left', 'snapped-right', 'maximized');
+  }
+
+  function saveWinGeom(rec, el) {
+    rec.restore = {
+      left: el.style.left,
+      top: el.style.top,
+      width: el.style.width || `${el.offsetWidth}px`,
+      height: el.style.height || `${el.offsetHeight}px`,
+    };
+  }
+
+  function restoreWinGeom(rec, el) {
+    if (!rec.restore) return;
+    clearSnapClasses(el);
+    el.style.left = rec.restore.left;
+    el.style.top = rec.restore.top;
+    el.style.width = rec.restore.width;
+    el.style.height = rec.restore.height;
+    const maxBtn = $('.win-max', el);
+    if (maxBtn) maxBtn.title = 'Maximize';
+  }
+
+  function snapWindow(rec, side) {
+    const el = rec.el;
+    const { w, h } = deskBounds();
+    if (!rec.restore || el.classList.contains('maximized') || el.classList.contains('snapped-left') || el.classList.contains('snapped-right')) {
+      if (!el.classList.contains('maximized') && !el.classList.contains('snapped-left') && !el.classList.contains('snapped-right')) {
+        saveWinGeom(rec, el);
+      }
+    } else {
+      saveWinGeom(rec, el);
+    }
+    clearSnapClasses(el);
+    if (side === 'left') {
+      el.classList.add('snapped-left');
+      el.style.left = '0px';
+      el.style.top = '0px';
+      el.style.width = `${Math.floor(w / 2)}px`;
+      el.style.height = `${h}px`;
+    } else if (side === 'right') {
+      el.classList.add('snapped-right');
+      const half = Math.floor(w / 2);
+      el.style.left = `${w - half}px`;
+      el.style.top = '0px';
+      el.style.width = `${half}px`;
+      el.style.height = `${h}px`;
+    } else if (side === 'max') {
+      el.classList.add('maximized');
+      $('.win-max', el).title = 'Restore';
+    }
+    hideSnapGuide();
+  }
+
+  function showSnapGuide(side) {
+    const g = $('#snapGuide');
+    if (!g) return;
+    const { w, h } = deskBounds();
+    g.classList.remove('hidden', 'left', 'right', 'top');
+    if (side === 'left') {
+      g.classList.add('left');
+      g.style.left = '0'; g.style.top = '0';
+      g.style.width = `${Math.floor(w / 2)}px`; g.style.height = `${h}px`;
+    } else if (side === 'right') {
+      g.classList.add('right');
+      const half = Math.floor(w / 2);
+      g.style.left = `${w - half}px`; g.style.top = '0';
+      g.style.width = `${half}px`; g.style.height = `${h}px`;
+    } else if (side === 'top') {
+      g.classList.add('top');
+      g.style.left = '0'; g.style.top = '0';
+      g.style.width = `${w}px`; g.style.height = `${h}px`;
+    }
+  }
+  function hideSnapGuide() {
+    $('#snapGuide')?.classList.add('hidden');
+  }
+
+  function activeWindowRec() {
+    for (const rec of windows.values()) {
+      if (rec.el.classList.contains('active') && !rec.el.classList.contains('minimized')) return rec;
+    }
+    return null;
   }
 
   function createWindow({ id, title, icon, bodyHtml, width, height }) {
@@ -406,24 +556,10 @@
     windows.set(id, rec);
 
     const toggleMax = () => {
-      if (el.classList.contains('maximized')) {
-        el.classList.remove('maximized');
-        if (rec.restore) {
-          el.style.left = rec.restore.left;
-          el.style.top = rec.restore.top;
-          el.style.width = rec.restore.width;
-          el.style.height = rec.restore.height;
-        }
-        $('.win-max', el).title = 'Maximize';
+      if (el.classList.contains('maximized') || el.classList.contains('snapped-left') || el.classList.contains('snapped-right')) {
+        restoreWinGeom(rec, el);
       } else {
-        rec.restore = {
-          left: el.style.left,
-          top: el.style.top,
-          width: el.style.width || `${el.offsetWidth}px`,
-          height: el.style.height || `${el.offsetHeight}px`,
-        };
-        el.classList.add('maximized');
-        $('.win-max', el).title = 'Restore';
+        snapWindow(rec, 'max');
       }
     };
 
@@ -443,14 +579,31 @@
   }
 
   function makeDraggable(win, bar) {
-    let sx, sy, ox, oy, dragging = false;
+    let sx, sy, ox, oy, dragging = false, pendingSide = null;
+    const recOf = () => windows.get(win.dataset.win);
     bar.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       if (e.target.closest('button')) return;
-      if (win.classList.contains('maximized')) return;
+      const rec = recOf();
+      // Unsnap / unmaximize on drag start, keeping pointer offset sensible
+      if (win.classList.contains('maximized') || win.classList.contains('snapped-left') || win.classList.contains('snapped-right')) {
+        const rw = rec?.restore?.width ? parseInt(rec.restore.width, 10) : Math.min(640, deskBounds().w - 40);
+        const rh = rec?.restore?.height ? parseInt(rec.restore.height, 10) : Math.min(420, deskBounds().h - 40);
+        clearSnapClasses(win);
+        win.style.width = `${rw}px`;
+        win.style.height = `${rh}px`;
+        const left = Math.max(0, e.clientX - Math.floor(rw / 2));
+        const top = Math.max(0, e.clientY - 12);
+        win.style.left = `${left}px`;
+        win.style.top = `${top}px`;
+        $('.win-max', win).title = 'Maximize';
+        ox = left; oy = top;
+      } else {
+        ox = win.offsetLeft; oy = win.offsetTop;
+      }
       dragging = true;
+      pendingSide = null;
       sx = e.clientX; sy = e.clientY;
-      ox = win.offsetLeft; oy = win.offsetTop;
       bar.setPointerCapture(e.pointerId);
     });
     bar.addEventListener('pointermove', (e) => {
@@ -460,8 +613,26 @@
       const maxT = Math.max(0, (desk?.clientHeight || window.innerHeight) - 40);
       win.style.left = `${Math.min(maxL, Math.max(0, ox + e.clientX - sx))}px`;
       win.style.top = `${Math.min(maxT, Math.max(0, oy + e.clientY - sy))}px`;
+      const { w } = deskBounds();
+      if (e.clientY <= SNAP_EDGE) pendingSide = 'top';
+      else if (e.clientX <= SNAP_EDGE) pendingSide = 'left';
+      else if (e.clientX >= w - SNAP_EDGE) pendingSide = 'right';
+      else pendingSide = null;
+      if (pendingSide) showSnapGuide(pendingSide);
+      else hideSnapGuide();
     });
-    bar.addEventListener('pointerup', () => { dragging = false; });
+    bar.addEventListener('pointerup', () => {
+      if (!dragging) return;
+      dragging = false;
+      const rec = recOf();
+      const side = pendingSide;
+      pendingSide = null;
+      hideSnapGuide();
+      if (!rec || !side) return;
+      if (side === 'left') snapWindow(rec, 'left');
+      else if (side === 'right') snapWindow(rec, 'right');
+      else if (side === 'top') snapWindow(rec, 'max');
+    });
   }
 
   function makeResizable(win) {
@@ -472,7 +643,7 @@
       const dir = handle.dataset.dir || '';
       handle.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
-        if (win.classList.contains('maximized')) return;
+        if (win.classList.contains('maximized') || win.classList.contains('snapped-left') || win.classList.contains('snapped-right')) return;
         e.preventDefault();
         e.stopPropagation();
         resizing = true;
@@ -582,6 +753,7 @@
     if (!app) return;
     const actions = {
       files: openFiles,
+      trash: openTrash,
       system: openSystem,
       settings: openSettings,
       processes: openProcesses,
@@ -698,6 +870,156 @@
     return rec;
   }
 
+
+  /* ── Recycle Bin ────────────────────────────────────────────────────── */
+  function openTrash() {
+    const id = 'trash';
+    if (windows.has(id)) { focusWin(id); return; }
+    const rec = createWindow({
+      id,
+      title: 'Recycle Bin',
+      icon: '🗑',
+      width: 720,
+      height: 480,
+      bodyHtml: `
+        <div class="trash-app app-shell">
+          <div class="app-toolbar">
+            <button type="button" data-act="restore" disabled>Restore</button>
+            <button type="button" data-act="delete" class="exp-danger" disabled>Delete permanently</button>
+            <button type="button" data-act="empty" class="exp-danger">Empty Recycle Bin</button>
+            <span class="exp-spacer"></span>
+            <button type="button" data-act="refresh">↻ Refresh</button>
+          </div>
+          <div class="trash-body">
+            <div class="file-list" data-act="list"><div class="empty">Loading…</div></div>
+          </div>
+          <div class="exp-status">
+            <span data-act="status-left">Ready</span>
+            <span data-act="status-right"></span>
+          </div>
+        </div>`,
+    });
+    const root = $('.trash-app', rec.el);
+    const state = { items: [], selected: null };
+    rec.state = state;
+
+    const setStatus = (left, right) => {
+      const a = $('[data-act="status-left"]', root);
+      const b = $('[data-act="status-right"]', root);
+      if (a) a.textContent = left || '';
+      if (b) b.textContent = right || '';
+    };
+
+    const syncBtns = () => {
+      const has = !!state.selected;
+      $('[data-act="restore"]', root).disabled = !has;
+      $('[data-act="delete"]', root).disabled = !has;
+    };
+
+    const render = (data) => {
+      state.items = data.items || [];
+      state.selected = null;
+      syncBtns();
+      const list = $('[data-act="list"]', root);
+      if (!data.enabled) {
+        list.innerHTML = `<div class="empty">Recycle Bin is disabled (<code>trash_enabled</code>).</div>`;
+        setStatus('Disabled', '');
+        return;
+      }
+      if (!state.items.length) {
+        list.innerHTML = `<div class="empty">Recycle Bin is empty.</div>`;
+        setStatus('0 items', fmtSize(data.total_size || 0));
+        return;
+      }
+      list.innerHTML = `
+        <table class="file-table trash-table">
+          <thead><tr>
+            <th>Name</th><th>Original location</th><th>Deleted</th><th>Size</th>
+          </tr></thead>
+          <tbody>
+            ${state.items.map((it) => `
+              <tr data-id="${escapeHtml(it.id)}" tabindex="0">
+                <td>${it.is_dir ? '📁' : '📄'} ${escapeHtml(it.name || '')}</td>
+                <td><code>${escapeHtml((it.original_root || '') + '/' + (it.path || ''))}</code></td>
+                <td>${escapeHtml(it.deleted_iso || '')}</td>
+                <td>${it.is_dir ? '—' : fmtSize(it.size || 0)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>`;
+      list.querySelectorAll('tr[data-id]').forEach((row) => {
+        row.addEventListener('click', () => {
+          list.querySelectorAll('.selected').forEach((r) => r.classList.remove('selected'));
+          row.classList.add('selected');
+          state.selected = row.dataset.id;
+          syncBtns();
+        });
+        row.addEventListener('dblclick', () => {
+          state.selected = row.dataset.id;
+          $('[data-act="restore"]', root).click();
+        });
+      });
+      const caps = [];
+      if (data.max_mb) caps.push(`max ${data.max_mb} MB`);
+      if (data.max_age_days) caps.push(`${data.max_age_days}d`);
+      setStatus(
+        `${state.items.length} item${state.items.length === 1 ? '' : 's'} · ${fmtSize(data.total_size || 0)}`,
+        caps.join(' · ')
+      );
+    };
+
+    const load = async () => {
+      setStatus('Loading…', '');
+      try {
+        const data = await api('api/trash');
+        render(data);
+      } catch (e) {
+        $('[data-act="list"]', root).innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`;
+        setStatus(e.message, '');
+      }
+    };
+
+    $('[data-act="refresh"]', root).onclick = load;
+    $('[data-act="restore"]', root).onclick = async () => {
+      if (!state.selected) return;
+      try {
+        const res = await api('api/trash/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: state.selected }),
+        });
+        if (res.renamed) setStatus(`Restored as ${res.name}`, '');
+        await load();
+      } catch (e) { alert(e.message); }
+    };
+    $('[data-act="delete"]', root).onclick = async () => {
+      if (!state.selected) return;
+      const it = state.items.find((x) => x.id === state.selected);
+      if (!confirm(`Permanently delete '${it?.name || 'item'}'?`)) return;
+      try {
+        await api('api/trash/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: state.selected }),
+        });
+        await load();
+      } catch (e) { alert(e.message); }
+    };
+    $('[data-act="empty"]', root).onclick = async () => {
+      if (!state.items.length) return;
+      if (!confirm(`Permanently delete all ${state.items.length} item(s) in the Recycle Bin?`)) return;
+      try {
+        await api('api/trash/empty', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        await load();
+      } catch (e) { alert(e.message); }
+    };
+
+    load();
+  }
+
   /* ── File Explorer (Windows-style) ──────────────────────────────────── */
   function openFiles() {
     const id = 'files';
@@ -718,7 +1040,7 @@
             <button type="button" data-act="paste" disabled>Paste</button>
             <span class="exp-sep"></span>
             <button type="button" data-act="rename">Rename</button>
-            <button type="button" data-act="delete" class="exp-danger">Delete</button>
+            <button type="button" data-act="delete" class="exp-danger" title="Move to Recycle Bin (Shift+Delete = permanent)">Delete</button>
             <span class="exp-sep"></span>
             <label class="exp-upload">Upload<input type="file" data-act="upload" hidden /></label>
             <button type="button" data-act="download">Download</button>
@@ -1083,7 +1405,8 @@
           }},
           { sep: true },
           { label: 'Rename', disabled: !entry || !writable, action: () => $('[data-act="rename"]', root).click() },
-          { label: 'Delete', disabled: !entry || !writable, action: () => $('[data-act="delete"]', root).click() },
+          { label: 'Delete', disabled: !entry || !writable, action: () => deleteSelected(false) },
+          { label: 'Delete permanently', disabled: !entry || !writable, danger: true, action: () => deleteSelected(true) },
           { sep: true },
           { label: 'New folder', disabled: !writable, action: () => $('[data-act="newfolder"]', root).click() },
           { label: 'Refresh', action: () => $('[data-act="refresh"]', root).click() },
@@ -1216,18 +1539,33 @@
         load();
       } catch (e) { alert(e.message); }
     };
-    $('[data-act="delete"]', root).onclick = async () => {
+    const deleteSelected = async (permanent) => {
       if (!state.selected) { alert('Select a file or folder first.'); return; }
-      if (!confirm(`Are you sure you want to permanently delete '${state.selected.split('/').pop()}'?`)) return;
+      const name = state.selected.split('/').pop();
+      if (permanent) {
+        if (!confirm(`Permanently delete '${name}'? This cannot be undone.`)) return;
+      } else if (CFG?.features?.trash === false) {
+        if (!confirm(`Delete '${name}'?`)) return;
+      }
       try {
-        await api('api/files/delete', {
+        const body = { root: state.root, path: state.selected };
+        if (permanent) body.permanent = true;
+        const res = await api('api/files/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ root: state.root, path: state.selected }),
+          body: JSON.stringify(body),
         });
+        if (res.trashed) setStatus(`Moved '${name}' to Recycle Bin`, '');
         load();
       } catch (e) { alert(e.message); }
     };
+    $('[data-act="delete"]', root).onclick = () => deleteSelected(false);
+    root.addEventListener('keydown', (e) => {
+      if (e.key === 'Delete' && state.selected) {
+        e.preventDefault();
+        deleteSelected(!!e.shiftKey);
+      }
+    });
     $('[data-act="upload"]', root).onchange = async (e) => {
       if (state.view !== 'folder') { alert('Open a folder first.'); e.target.value = ''; return; }
       const file = e.target.files?.[0];
@@ -2161,6 +2499,7 @@
             <li>systemctl: ${CFG.features?.systemctl ? '✓' : '—'}</li>
             <li>Service control: ${CFG.features?.service_control ? '✓ enabled' : '— off'}</li>
             <li>Docker control: ${CFG.features?.docker_control ? '✓ enabled' : '— off'}</li>
+            <li>Recycle Bin: ${CFG.features?.trash === false ? '— off' : '✓'}</li>
           </ul>
           <h3 style="margin-top:14px;font-size:13px;">Mounted places</h3>
           <ul>
@@ -2215,16 +2554,48 @@
       e.stopPropagation();
       toggleStart();
     });
+    const startSearch = $('#startSearch');
+    if (startSearch) {
+      startSearch.addEventListener('input', () => filterStartMenu());
+      startSearch.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          if (startSearch.value) {
+            startSearch.value = '';
+            filterStartMenu();
+          } else {
+            closeStart();
+            $('#startBtn')?.focus();
+          }
+        } else if (e.key === 'Enter') {
+          const first = $('#startItems .start-item');
+          if (first) first.click();
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          $('#startItems .start-item')?.focus();
+        }
+      });
+      // Prevent document click handler from treating typing as outside click quirks
+      startSearch.addEventListener('click', (e) => e.stopPropagation());
+    }
     document.addEventListener('click', (e) => {
       if (!e.target.closest('#startMenu') && !e.target.closest('#startBtn')) closeStart();
       if (!e.target.closest('.ctx-menu')) closeContextMenu();
     });
     document.addEventListener('contextmenu', (e) => {
       // desktop empty area: no browser menu noise for icons only; leave default elsewhere
-      if (e.target.closest('.desk-icon, .explorer, .ctx-menu')) return;
+      if (e.target.closest('.desk-icon, .explorer, .ctx-menu, .trash-app')) return;
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        const startOpen = !$('#startMenu')?.classList.contains('hidden');
+        const search = $('#startSearch');
+        if (startOpen && search && search.value) {
+          search.value = '';
+          filterStartMenu();
+          search.focus();
+          return;
+        }
         closeStart();
         closeContextMenu();
         return;
@@ -2233,6 +2604,15 @@
       if (e.ctrlKey && e.key === 'Tab') {
         e.preventDefault();
         cycleWindows(e.shiftKey);
+      }
+      // Window snap: Ctrl+Alt+Arrow (avoid stealing plain browser / OS shortcuts)
+      if (e.ctrlKey && e.altKey && !e.shiftKey && !e.metaKey) {
+        const rec = activeWindowRec();
+        if (!rec) return;
+        if (e.key === 'ArrowLeft') { e.preventDefault(); snapWindow(rec, 'left'); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); snapWindow(rec, 'right'); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); snapWindow(rec, 'max'); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); restoreWinGeom(rec, rec.el); }
       }
     });
 

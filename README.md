@@ -24,7 +24,8 @@ Inspired by Cockpit, CasaOS, and classic File Explorer.
 | **Logs** | `journalctl` tail by unit |
 | **Launcher** | Bookmark tiles from config |
 | **Notes / Calculator** | Desktop utilities |
-| **Desktop chrome** | Resizable windows, maximize/restore, Ctrl+Tab cycle, tray meters, sticky icon positions |
+| **Recycle Bin** | Soft-delete trash with restore / empty; size & age caps (`trash_max_mb`, `trash_max_age_days`) |
+| **Desktop chrome** | Resizable windows, snap left/right, Start search, Ctrl+Tab cycle, tray meters, sticky icon positions |
 
 Safety first: path jail under configured roots, optional writes, **no arbitrary command execution** from the web UI. Service/Docker controls (when enabled) use fixed argv + strict allowlists only.
 
@@ -81,6 +82,10 @@ Copy from `config.example.json`. Important keys:
 | `discover_docker` | Include `docker ps` in Programs (default `true`) |
 | `embed_map` | Optional: map hostnames → `/embed/<key>/` for same-origin iframes |
 | `wallpaper` | Filename under `static/` (optional) |
+| `trash_enabled` | Soft-delete to Recycle Bin (default **`true`**) |
+| `trash_max_mb` | Cap trash storage in megabytes (default `1024`; `0` = unlimited) |
+| `trash_max_age_days` | Auto-purge trash older than N days (default `30`; `0` = unlimited) |
+| `trash_max_items` | Max trash entries before oldest are dropped (default `200`) |
 
 **Machine-specific** data (your paths, hostnames, personal wallpaper) stays in `config.json` and is **gitignored**.
 
@@ -108,7 +113,7 @@ Copy from `config.example.json`. Important keys:
 
 | Field | Effect |
 |-------|--------|
-| `action` | Open a built-in app id (`files`, `system`, `docker`, …) |
+| `action` | Open a built-in app id (`files`, `trash`, `system`, `docker`, …) |
 | `url` | Open inside a Fox OS window (iframe). Prefer same-origin `/embed/...` or a host listed in `embed_map` |
 | `embed` | Alias for `url` when you want an explicit embed target |
 | `label` / `icon` / `desc` | Desktop + Start menu chrome |

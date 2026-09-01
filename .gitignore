@@ -23,3 +23,6 @@ HANDOFF.md
 *.swp
 .idea/
 .vscode/
+
+# Recycle Bin payloads (manifest + files)
+data/trash/
