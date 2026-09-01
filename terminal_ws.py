@@ -198,7 +198,7 @@ def start_terminal_ws(
                 async def handler(websocket):
                     await _pty_session(websocket, allow_check)
 
-                bind_host = host if host in ("127.0.0.1", "::1", "localhost") else "127.0.0.1"
+                bind_host = host or "127.0.0.1"
                 async with serve(handler, bind_host, port, max_size=2_000_000) as server:
                     _server = server
                     log.info(
