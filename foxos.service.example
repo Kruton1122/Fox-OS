@@ -13,7 +13,7 @@ ExecStart=/usr/bin/python3 /opt/foxos/server.py
 Restart=on-failure
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
-NoNewPrivileges=true
+# NoNewPrivileges=true  # disables sudo in Terminal PTY; leave false/off when allow_terminal
 PrivateTmp=true
 
 [Install]
