@@ -44,6 +44,37 @@
     document.documentElement.dataset.layout = mobile ? 'mobile' : 'desktop';
   }
 
+  /* ── Themes ──────────────────────────────────────────────────────────── */
+  const THEME_KEY = 'foxos.theme.v1';
+  const THEMES = [
+    { id: 'classic', name: 'Classic', blurb: 'Win 3.1 / 98 — the original Fox OS chrome.', swatch: ['#000080', '#c0c0c0', '#1084d0'] },
+    { id: 'modern', name: 'Modern', blurb: 'Clean flat shell, soft shadows, indigo accent.', swatch: ['#4a5eff', '#eef1f6', '#7c5cff'] },
+    { id: 'liquid-glass', name: 'Liquid Glass', blurb: 'Frosted translucency, blur, specular highlights.', swatch: ['#0a84ff', '#eaf4ff', '#5e5ce6'] },
+    { id: 'frutiger-aero', name: 'Frutiger Aero', blurb: 'Glossy blues, aqua gloss, 2007 nostalgia.', swatch: ['#1f8fe0', '#eaf7ff', '#7fd8ff'] },
+  ];
+  function getTheme() {
+    try { return localStorage.getItem(THEME_KEY) || 'classic'; } catch { return 'classic'; }
+  }
+  function hasLocalTheme() {
+    try { return localStorage.getItem(THEME_KEY) != null; } catch { return false; }
+  }
+  function applyTheme(id) {
+    document.documentElement.dataset.theme = id;
+  }
+  function setTheme(id, opts = {}) {
+    applyTheme(id);
+    try { localStorage.setItem(THEME_KEY, id); } catch { /* */ }
+    if (!opts.skipSync) {
+      api('api/desktop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ theme: id }),
+      }).then((res) => {
+        if (CFG) CFG.desktop = { ...(CFG.desktop || {}), theme: res.desktop?.theme || id };
+      }).catch(() => { /* best effort — localStorage already has it */ });
+    }
+  }
+
   const CODE_EXTS = new Set([
     'py', 'js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs', 'go', 'rs', 'c', 'cpp', 'cc', 'h', 'hpp',
     'java', 'kt', 'swift', 'rb', 'php', 'sh', 'bash', 'zsh', 'ps1', 'sql', 'r', 'lua',
@@ -3319,6 +3350,18 @@
           </section>
 
           <section class="settings-section">
+            <h3>Theme</h3>
+            <div class="theme-grid" data-act="theme-grid">
+              ${THEMES.map((t) => `
+                <button type="button" class="theme-card ${t.id === getTheme() ? 'current' : ''}" data-theme-id="${t.id}" title="${escapeHtml(t.blurb)}">
+                  <span class="theme-swatch">${t.swatch.map((c) => `<i style="background:${escapeHtml(c)}"></i>`).join('')}</span>
+                  <span class="theme-name">${escapeHtml(t.name)}</span>
+                  <span class="theme-blurb">${escapeHtml(t.blurb)}</span>
+                </button>`).join('')}
+            </div>
+          </section>
+
+          <section class="settings-section">
             <h3>Appearance</h3>
             <label class="settings-check"><input type="checkbox" data-act="widgets" ${desk.show_widgets === false ? '' : 'checked'}/> Show desktop widgets</label>
             <label>Icon size
@@ -3463,6 +3506,12 @@
         applyDesktopAppearance();
       } catch (e) { alert(e.message); }
     };
+    root.querySelectorAll('.theme-card').forEach((btn) => {
+      btn.onclick = () => {
+        setTheme(btn.dataset.themeId);
+        root.querySelectorAll('.theme-card').forEach((b) => b.classList.toggle('current', b === btn));
+      };
+    });
     $('[data-act="layout-force"]', root).onchange = (e) => setLayoutForce(e.target.value);
     $('[data-act="open-term"]', root).onclick = () => openTerminal();
     $('[data-act="open-browser"]', root).onclick = () => openBrowser();
@@ -3561,6 +3610,11 @@
       $('#trayHost').textContent = CFG.hostname || '';
       const mHost = $('#mHost');
       if (mHost) mHost.textContent = CFG.hostname || '';
+      if (!hasLocalTheme() && CFG.desktop?.theme) {
+        setTheme(CFG.desktop.theme, { skipSync: true });
+      } else {
+        applyTheme(getTheme());
+      }
       applyDesktopAppearance();
       applyWallpaper();
       renderDesktopIcons();

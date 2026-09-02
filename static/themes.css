@@ -1,0 +1,152 @@
+/* ══════════════════════════════════════════════════════════════════════
+   Fox OS themes (v3.4.0)
+   ──────────────────────────────────────────────────────────────────────
+   style.css defines the "Classic" (Win 3.1/98) look directly in :root —
+   that stays the untouched default. Everything below is opt-in: it only
+   applies once app.js sets <html data-theme="…">, and only redefines CSS
+   custom properties (plus a handful of purely-additive selectors for
+   gloss/mobile-chrome) that style.css already consumes with safe
+   fallbacks. Loaded after style.css so these overrides win the cascade.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Modern ("Aurora") — clean flat light shell, indigo accent, soft shadows ── */
+html[data-theme="modern"] {
+  --panel: #eef1f6;
+  --panel-hi: #ffffff;
+  --panel-lo: #dbe0e8;
+  --panel-dk: #c2c9d6;
+  --title: #4a5eff;
+  --title2: #7c5cff;
+  --text: #1c2333;
+  --muted: #5b6579;
+  --sel: #4a5eff;
+  --sel-text: #ffffff;
+  --window: #ffffff;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --shadow: 0 16px 40px -12px rgba(20, 26, 50, .35), 0 2px 8px rgba(20, 26, 50, .12);
+  --radius: 14px;
+  --radius-sm: 8px;
+  --title-inactive: linear-gradient(90deg, #b7bfcc, #d3d8e2);
+  --title-active: linear-gradient(90deg, var(--title), var(--title2));
+  --boot-bg: radial-gradient(ellipse at 50% 30%, #2a3466, #0b0e18 72%);
+  --boot-text: #eef1ff;
+}
+html[data-theme="modern"] .mobile-statusbar {
+  background: rgba(255, 255, 255, .82);
+  color: #1c2333;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 1px 0 rgba(20, 26, 50, .08);
+}
+html[data-theme="modern"] .mobile-dock {
+  background: rgba(255, 255, 255, .88);
+  border-top-color: rgba(20, 26, 50, .08);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+html[data-theme="modern"] .dock-btn { color: #5b6579; }
+html[data-theme="modern"] .dock-btn.active,
+html[data-theme="modern"] .dock-btn:active { color: var(--title); }
+
+/* ── Liquid Glass — frosted translucency, blur, specular highlight ── */
+html[data-theme="liquid-glass"] {
+  --panel: rgba(255, 255, 255, .55);
+  --panel-hi: rgba(255, 255, 255, .85);
+  --panel-lo: rgba(255, 255, 255, .25);
+  --panel-dk: rgba(120, 140, 170, .35);
+  --title: #0a84ff;
+  --title2: #5e5ce6;
+  --text: #10151f;
+  --muted: #4b5566;
+  --sel: #0a84ff;
+  --sel-text: #ffffff;
+  --window: rgba(255, 255, 255, .92);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  --shadow: 0 20px 50px -14px rgba(10, 30, 60, .45), 0 4px 14px rgba(10, 30, 60, .18);
+  --radius: 18px;
+  --radius-sm: 10px;
+  --chrome-blur: blur(22px);
+  --title-inactive: linear-gradient(135deg, rgba(120, 140, 170, .55), rgba(150, 165, 190, .4));
+  --title-active: linear-gradient(135deg, rgba(10, 132, 255, .85), rgba(94, 92, 230, .75));
+  --boot-bg: radial-gradient(ellipse at 50% 30%, #2e6fd6, #0a1a33 72%);
+  --boot-text: #eaf4ff;
+}
+/* Specular highlight streak across the titlebar glass */
+html[data-theme="liquid-glass"] .win-titlebar::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, 0) 65%);
+  pointer-events: none;
+}
+html[data-theme="liquid-glass"] .mobile-statusbar {
+  background: rgba(255, 255, 255, .55);
+  color: #10151f;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .4);
+}
+html[data-theme="liquid-glass"] .mobile-dock {
+  background: rgba(255, 255, 255, .6);
+  border-top-color: rgba(255, 255, 255, .5);
+  backdrop-filter: blur(26px);
+  -webkit-backdrop-filter: blur(26px);
+}
+html[data-theme="liquid-glass"] .dock-btn { color: #4b5566; }
+html[data-theme="liquid-glass"] .dock-btn.active,
+html[data-theme="liquid-glass"] .dock-btn:active { color: var(--title); }
+/* Degrade gracefully where backdrop-filter isn't supported: fall back to a more opaque glass */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-theme="liquid-glass"] {
+    --panel: rgba(240, 245, 252, .96);
+    --window: #ffffff;
+  }
+  html[data-theme="liquid-glass"] .mobile-statusbar,
+  html[data-theme="liquid-glass"] .mobile-dock { background: rgba(240, 245, 252, .96); }
+}
+
+/* ── Frutiger Aero — glossy blues, skeuomorphic gloss, aqua accents ── */
+html[data-theme="frutiger-aero"] {
+  --panel: linear-gradient(180deg, #eaf7ff 0%, #cfeaff 45%, #a9d8f7 46%, #dff2ff 100%);
+  --panel-hi: #ffffff;
+  --panel-lo: #6fb3e0;
+  --panel-dk: #2f79b3;
+  --title: #1f8fe0;
+  --title2: #7fd8ff;
+  --text: #0d2436;
+  --muted: #3c5c72;
+  --sel: #1f8fe0;
+  --sel-text: #ffffff;
+  --window: #ffffff;
+  --font: "Segoe UI", "Segoe UI Variable", Verdana, sans-serif;
+  --shadow: 0 14px 34px -10px rgba(10, 60, 100, .4), 0 3px 10px rgba(10, 60, 100, .18);
+  --radius: 10px;
+  --radius-sm: 7px;
+  --chrome-blur: blur(6px);
+  --title-inactive: linear-gradient(180deg, #cfe3f0, #a9bfcf);
+  --title-active: linear-gradient(180deg, #7fd8ff 0%, #1f8fe0 55%, #0f6bb8 100%);
+  --boot-bg: radial-gradient(ellipse at 50% 25%, #bfe9ff, #1f6fae 60%, #0a3a5c 100%);
+  --boot-text: #eaffff;
+}
+/* Glossy top-half highlight, classic Aero-glass button/titlebar sheen */
+html[data-theme="frutiger-aero"] .win-titlebar::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .85) 0%, rgba(255, 255, 255, .25) 42%, rgba(255, 255, 255, 0) 46%);
+  pointer-events: none;
+}
+html[data-theme="frutiger-aero"] .mobile-statusbar {
+  background: linear-gradient(180deg, rgba(210, 240, 255, .9), rgba(160, 215, 245, .85));
+  color: #0d2436;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .6);
+}
+html[data-theme="frutiger-aero"] .mobile-dock {
+  background: linear-gradient(180deg, rgba(200, 235, 255, .92), rgba(140, 200, 235, .9));
+  border-top-color: rgba(255, 255, 255, .6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+html[data-theme="frutiger-aero"] .dock-btn { color: #3c5c72; }
+html[data-theme="frutiger-aero"] .dock-btn.active,
+html[data-theme="frutiger-aero"] .dock-btn:active { color: var(--title); }

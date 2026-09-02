@@ -9,7 +9,14 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Fox OS" />
   <title>Fox OS</title>
-  <link rel="stylesheet" href="static/style.css?v=330" />
+  <script>
+    try {
+      var t = localStorage.getItem('foxos.theme.v1');
+      if (t) document.documentElement.dataset.theme = t;
+    } catch (e) { /* */ }
+  </script>
+  <link rel="stylesheet" href="static/style.css?v=340" />
+  <link rel="stylesheet" href="static/themes.css?v=340" />
   <link rel="stylesheet" href="static/vendor/xterm/xterm.css?v=330" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='50' font-size='48'%3E🦊%3C/text%3E%3C/svg%3E" />
 </head>
@@ -92,6 +99,6 @@
 
   <script src="static/vendor/xterm/xterm.min.js?v=330"></script>
   <script src="static/vendor/xterm/addon-fit.min.js?v=330"></script>
-  <script src="static/app.js?v=330"></script>
+  <script src="static/app.js?v=340"></script>
 </body>
 </html>

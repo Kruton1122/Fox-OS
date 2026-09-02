@@ -44,9 +44,9 @@ html, body {
 .boot {
   position: fixed; inset: 0; z-index: 9999;
   display: grid; place-items: center;
-  background: radial-gradient(ellipse at 50% 30%, #1e4d76, #071018 70%);
+  background: var(--boot-bg, radial-gradient(ellipse at 50% 30%, #1e4d76, #071018 70%));
 }
-.boot-card { text-align: center; color: #e8f1ff; width: min(320px, 90vw); }
+.boot-card { text-align: center; color: var(--boot-text, #e8f1ff); width: min(320px, 90vw); }
 .boot-fox { font-size: 64px; filter: drop-shadow(0 8px 20px #0008); animation: bob 1.4s ease-in-out infinite; }
 .boot-title { font-size: 28px; font-weight: 800; letter-spacing: .04em; margin-top: 8px; }
 .boot-sub { opacity: .7; font-size: 13px; margin: 8px 0 18px; }
@@ -171,7 +171,10 @@ html, body {
   background: var(--panel);
   border: 2px solid;
   border-color: var(--panel-hi) var(--panel-dk) var(--panel-dk) var(--panel-hi);
+  border-radius: var(--radius, 0);
   box-shadow: var(--shadow);
+  backdrop-filter: var(--chrome-blur, none);
+  -webkit-backdrop-filter: var(--chrome-blur, none);
   display: flex; flex-direction: column;
   z-index: 10;
 }
@@ -182,14 +185,17 @@ html, body {
 }
 .win.minimized { display: none !important; }
 .win-titlebar {
+  position: relative;
   display: flex; align-items: center; gap: 6px;
   height: 28px; padding: 2px 3px 2px 6px;
-  background: linear-gradient(90deg, #606070, #9090a0);
+  background: var(--title-inactive, linear-gradient(90deg, #606070, #9090a0));
   color: #fff; font-size: 12px; font-weight: 700;
   cursor: grab;
+  border-radius: var(--radius, 0) var(--radius, 0) 0 0;
+  overflow: hidden;
 }
 .win.active .win-titlebar {
-  background: linear-gradient(90deg, #000080, #1084d0);
+  background: var(--title-active, linear-gradient(90deg, var(--title), var(--title2)));
 }
 .win-titlebar:active { cursor: grabbing; }
 .win-ico { font-size: 14px; }
@@ -201,6 +207,7 @@ html, body {
   border: 1px solid;
   border-color: var(--panel-hi) var(--panel-dk) var(--panel-dk) var(--panel-hi);
   background: var(--panel); color: #000; cursor: pointer;
+  border-radius: var(--radius-sm, 0);
 }
 .win-controls button:active {
   border-color: var(--panel-dk) var(--panel-hi) var(--panel-hi) var(--panel-dk);
@@ -212,6 +219,7 @@ html, body {
   border: 1px solid var(--panel-lo);
   margin: 2px; overflow: auto;
   display: flex; flex-direction: column;
+  border-radius: 0 0 var(--radius, 0) var(--radius, 0);
 }
 
 /* Taskbar */
@@ -223,6 +231,8 @@ html, body {
   background: var(--panel);
   border-top: 2px solid var(--panel-hi);
   box-shadow: 0 -1px 0 var(--panel-lo);
+  backdrop-filter: var(--chrome-blur, none);
+  -webkit-backdrop-filter: var(--chrome-blur, none);
 }
 .start-btn {
   display: flex; align-items: center; gap: 6px;
@@ -231,6 +241,7 @@ html, body {
   border: 2px solid;
   border-color: var(--panel-hi) var(--panel-dk) var(--panel-dk) var(--panel-hi);
   background: var(--panel); cursor: pointer;
+  border-radius: var(--radius-sm, 0);
 }
 .start-btn:active, .start-btn.open {
   border-color: var(--panel-dk) var(--panel-hi) var(--panel-hi) var(--panel-dk);
@@ -245,6 +256,7 @@ html, body {
   background: var(--panel); cursor: pointer;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   text-align: left;
+  border-radius: var(--radius-sm, 0);
 }
 .task-tab.active {
   border-color: var(--panel-dk) var(--panel-hi) var(--panel-hi) var(--panel-dk);
@@ -271,6 +283,10 @@ html, body {
   border: 2px solid;
   border-color: var(--panel-hi) var(--panel-dk) var(--panel-dk) var(--panel-hi);
   box-shadow: var(--shadow);
+  border-radius: var(--radius, 0);
+  overflow: hidden;
+  backdrop-filter: var(--chrome-blur, none);
+  -webkit-backdrop-filter: var(--chrome-blur, none);
 }
 .start-side {
   width: 32px;
@@ -324,6 +340,7 @@ html, body {
   border: 1px solid;
   border-color: var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo);
   background: #fff; padding: 4px 8px;
+  border-radius: var(--radius-sm, 0);
 }
 .app-toolbar button { cursor: pointer; background: var(--panel); }
 .app-toolbar button:active {
@@ -832,6 +849,7 @@ html, body {
   border: 2px solid;
   border-color: var(--panel-hi) var(--panel-dk) var(--panel-dk) var(--panel-hi);
   background: var(--panel);
+  border-radius: var(--radius-sm, 0);
 }
 .calc-keys button:active {
   border-color: var(--panel-dk) var(--panel-hi) var(--panel-hi) var(--panel-dk);
@@ -917,10 +935,14 @@ html, body {
   background: var(--panel);
   border: 2px solid;
   border-color: var(--panel-hi) var(--panel-dk) var(--panel-dk) var(--panel-hi);
-  box-shadow: 2px 2px 0 #0006;
+  box-shadow: var(--shadow);
   padding: 2px;
   font-size: 12px;
   color: #000;
+  border-radius: var(--radius, 0);
+  overflow: hidden;
+  backdrop-filter: var(--chrome-blur, none);
+  -webkit-backdrop-filter: var(--chrome-blur, none);
 }
 .ctx-menu.hidden { display: none; }
 .ctx-item {
@@ -931,7 +953,7 @@ html, body {
   font: inherit; cursor: pointer; color: inherit;
 }
 .ctx-item:hover, .ctx-item:focus-visible {
-  background: #000080; color: #fff; outline: none;
+  background: var(--sel); color: var(--sel-text); outline: none;
 }
 .ctx-item:disabled {
   color: #808080; cursor: default;
@@ -1014,6 +1036,7 @@ html, body {
   border: 1px solid;
   border-color: var(--panel-hi) var(--panel-dk) var(--panel-dk) var(--panel-hi);
   background: var(--panel);
+  border-radius: var(--radius-sm, 0);
 }
 .ctrl-btns button:active {
   border-color: var(--panel-dk) var(--panel-hi) var(--panel-hi) var(--panel-dk);
@@ -1075,8 +1098,8 @@ html, body {
 }
 .task-tab-count {
   flex: 0 0 auto;
-  background: #000080;
-  color: #fff;
+  background: var(--sel);
+  color: var(--sel-text);
   font-size: 10px;
   border-radius: 8px;
   padding: 0 5px;
@@ -1126,6 +1149,7 @@ html, body {
   border: 2px outset var(--panel-hi);
   font-size: 12px;
   cursor: pointer;
+  border-radius: var(--radius-sm, 0);
 }
 .wp-grid {
   display: grid;
@@ -1150,8 +1174,34 @@ html, body {
   object-fit: cover;
   background: #333;
 }
-.wp-thumb.current { border-color: #000080; background: #cce4f7; }
-.wp-thumb:hover { border-color: #1084d0; }
+.wp-thumb.current { border-color: var(--sel); background: #cce4f7; }
+.wp-thumb:hover { border-color: var(--title2); }
+.wp-thumb { border-radius: var(--radius-sm, 0); }
+.wp-thumb img { border-radius: calc(var(--radius-sm, 0) * 0.6); }
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.theme-card {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px;
+  border: 2px solid transparent;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  border-radius: var(--radius-sm, 0);
+}
+.theme-card:hover { border-color: var(--title2); }
+.theme-card.current { border-color: var(--sel); background: #eef4ff; }
+.theme-swatch { display: flex; gap: 3px; }
+.theme-swatch i { width: 16px; height: 16px; display: block; border: 1px solid #0002; border-radius: 3px; }
+.theme-name { font-weight: 700; font-size: 12px; }
+.theme-blurb { font-size: 10.5px; color: var(--muted); line-height: 1.3; }
+body.mobile .theme-card { padding: 12px; min-height: 44px; }
 
 .browser-app .webapp-url { flex: 1; min-width: 0; }
 

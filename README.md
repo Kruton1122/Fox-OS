@@ -27,7 +27,7 @@ Inspired by Cockpit, CasaOS, and classic File Explorer.
 | **Recycle Bin** | Soft-delete trash with restore / empty; size & age caps (`trash_max_mb`, `trash_max_age_days`) |
 | **Browser** | In-desktop iframe browser (address bar + nav); optional server Chromium via `allow_system_browser` |
 | **Terminal** | In-app PTY via xterm.js + WebSocket (`allow_terminal`, default off) |
-| **Desktop chrome** | Resizable windows, snap, Start search, taskbar previews/grouping, session restore, wallpaper Settings |
+| **Desktop chrome** | Resizable windows, snap, Start search, taskbar previews/grouping, session restore, wallpaper Settings, 4 switchable themes |
 
 Safety first: path jail under configured roots, optional writes, **no arbitrary command execution** from the web UI. Service/Docker controls (when enabled) use fixed argv + strict allowlists only.
 
@@ -93,7 +93,7 @@ Copy from `config.example.json`. Important keys:
 | `terminal_ws_port` | Localhost-only side WebSocket port for the PTY (default `8766`; Waitress cannot do WS) |
 | `terminal_embed` / `terminal_url` | **Deprecated** (Wetty-era). Ignored by the Terminal app; safe to leave empty |
 
-Appearance overlays (wallpaper choice, widgets, icon size, accent) live in **`data/desktop.json`** (gitignored) and merge into `/api/config` — they do not rewrite `config.json`.
+Appearance overlays (wallpaper choice, widgets, icon size, accent, theme) live in **`data/desktop.json`** (gitignored) and merge into `/api/config` — they do not rewrite `config.json`.
 
 **Machine-specific** data (your paths, hostnames, personal wallpaper) stays in `config.json` and is **gitignored**.
 
@@ -200,9 +200,25 @@ Restart Fox OS after changing these flags. Prefer reverse-proxy auth before turn
 | `/api/trash*` | Recycle Bin list / restore / permanent delete / empty |
 | `/api/places` | This PC / Network places |
 | `/api/notes` | sticky notes store |
-| `/api/desktop` | GET/POST appearance overlay (`data/desktop.json`) |
+| `/api/desktop` | GET/POST appearance overlay (`data/desktop.json`): wallpaper, widgets, icon size, accent, theme |
 | `/api/wallpaper*` | list / upload / select / reset / file |
 | `/api/browser/open` | POST opt-in system Chromium (fixed argv) |
+
+## Themes
+
+Fox OS ships four selectable looks, switched live from **Settings → Theme** — no reload:
+
+| Theme | Look |
+|-------|------|
+| **Classic** | The original Win 3.1/98 chrome (default for existing users) |
+| **Modern** | Clean flat shell — soft shadows, rounded corners, indigo accent, system-ui type |
+| **Liquid Glass** | Frosted translucency, `backdrop-filter` blur on windows/taskbar/Start menu, specular titlebar highlight |
+| **Frutiger Aero** | Glossy blue/aqua gradients, skeuomorphic titlebar sheen — CSS only, no image assets |
+
+- Implemented as CSS custom properties switched via `<html data-theme="…">`; `static/style.css` defines the Classic baseline in `:root`, `static/themes.css` layers the other three (loaded after, so it wins the cascade) — nothing else in the codebase needs to know which theme is active.
+- Choice is stored in `localStorage` (`foxos.theme.v1`) and applied before first paint (no flash of the wrong theme), and best-effort synced to the `theme` field in the `data/desktop.json` appearance overlay via `POST /api/desktop` — so a second browser on the same server picks up your last choice, while `localStorage` stays the fast path for the current browser.
+- Liquid Glass degrades to a solid near-opaque panel (via `@supports`) on browsers without `backdrop-filter`.
+- Wallpaper is independent of theme — themes restyle chrome (windows, taskbar, Start menu, dock), not the desktop background.
 
 ## Wallpaper
 
