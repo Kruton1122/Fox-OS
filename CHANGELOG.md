@@ -4,6 +4,28 @@ All notable changes to Fox OS are documented here.
 
 Format inspired by [Keep a Changelog](https://keepachangelog.com/). Versioning follows [SemVer](https://semver.org/).
 
+## [3.4.0] — 2026-09-01
+
+Themes: four selectable looks for the whole shell, switchable live from Settings.
+
+### Added
+
+- **Theme system** — CSS-variable-driven, applied via `<html data-theme="…">`; loaded from `static/themes.css` (kept separate from `static/style.css`, which still defines the **Classic** baseline directly in `:root`). Covers windows, titlebars, taskbar, Start menu, context menus, buttons, boot screen, and the mobile status bar/dock.
+- **Classic** — the original Win 3.1/98 chrome, unchanged, still the default for existing users.
+- **Modern** — a new flat, light shell: soft shadows, rounded corners, indigo accent, system-ui typography.
+- **Liquid Glass** — frosted translucency (`backdrop-filter: blur()`) on windows, taskbar, Start menu, and context menus, with a specular highlight streak on titlebars; degrades to a solid near-opaque panel via `@supports` when `backdrop-filter` isn't available.
+- **Frutiger Aero** — glossy blue/aqua gradients, skeuomorphic gloss highlight on titlebars, 2000s-web nostalgia — CSS-only, no image assets.
+- **Settings → Theme** — swatch picker with name + blurb per theme; switching applies instantly, no reload.
+- Theme choice persists in `localStorage` (`foxos.theme.v1`) for instant apply on load (set before first paint to avoid a flash of the wrong theme), and best-effort syncs to the `data/desktop.json` appearance overlay (new `theme` field, validated server-side) via `POST /api/desktop` so a fresh browser on the same server picks up the last-chosen theme.
+
+### Changed
+
+- Version bumped to **3.4.0**; static asset cache busters (`?v=340`).
+- A handful of previously-hardcoded chrome colors (context-menu hover, task tab counter, active titlebar gradient, tray meters, Start search, Settings theme cards) now reference CSS variables (`--sel`, `--title`/`--title2`, `--text`, `--panel-*`) instead of literal hex — Classic values stay in `:root` so the default look is unchanged.
+- Titlebars gain `--title-fg` / `--title-fg-inactive` so Modern / Liquid Glass / Frutiger Aero inactive windows keep readable contrast (white-on-light was a miss); gloss `::after` overlays stack *behind* title text and window controls.
+- Classic is applied by *omitting* `<html data-theme>` (the `:root` default). The other three set `data-theme`; invalid `localStorage` values fall back to Classic.
+- No backend/API changes beyond the new optional `theme` field on `/api/desktop` (GET/POST) and `/api/config`; wallpaper, mobile detection, trash, and the PTY terminal are untouched.
+
 ## [3.3.0] — 2026-09-01
 
 Mobile shell: Android/iOS-style launcher chrome for phones and tablets, alongside the unchanged desktop.
@@ -117,7 +139,8 @@ Initial public release: portable Flask + static web desktop for headless Linux.
 - `config.example.json` template; machine-local `config.json` gitignored.
 - systemd unit example and reverse-proxy notes.
 
-[3.3.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.2.0...HEAD
+[3.4.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.1...v3.2.0
 [3.1.1]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.0.1...v3.1.0

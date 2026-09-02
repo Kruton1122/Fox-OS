@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, abort, after_this_request, jsonify, request, send_file, send_from_directory
 
-VERSION = "3.3.0"
+VERSION = "3.4.0"
 
 NETWORK_FS = frozenset({
     "cifs", "smb3", "smb2", "nfs", "nfs4", "fuse.sshfs", "fuse.rclone",
@@ -163,6 +163,9 @@ def write_allowed(root_id: str) -> bool:
 
 
 
+THEME_IDS = ("classic", "modern", "liquid-glass", "frutiger-aero")
+
+
 def _default_desktop() -> dict:
     return {
         "wallpaper": None,  # None = use CFG wallpaper / static fallback
@@ -170,6 +173,7 @@ def _default_desktop() -> dict:
         "show_widgets": True,
         "icon_size": "md",  # sm | md | lg
         "accent": "",  # optional CSS color for titlebar accent
+        "theme": "classic",  # classic | modern | liquid-glass | frutiger-aero
     }
 
 
@@ -189,15 +193,17 @@ def load_desktop() -> dict:
         return dict(base)
     out = dict(base)
     for k, v in data.items():
-        if k in base or k in ("wallpaper", "wallpaper_source", "show_widgets", "icon_size", "accent"):
+        if k in base or k in ("wallpaper", "wallpaper_source", "show_widgets", "icon_size", "accent", "theme"):
             out[k] = v
+    if out.get("theme") not in THEME_IDS:
+        out["theme"] = "classic"
     return out
 
 
 def save_desktop(data: dict) -> dict:
     cur = load_desktop()
     for k, v in data.items():
-        if k in ("wallpaper", "wallpaper_source", "show_widgets", "icon_size", "accent"):
+        if k in ("wallpaper", "wallpaper_source", "show_widgets", "icon_size", "accent", "theme"):
             cur[k] = v
     with _DESKTOP_LOCK:
         DESKTOP_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1040,6 +1046,7 @@ def api_config():
             "show_widgets": bool(desk.get("show_widgets", True)),
             "icon_size": desk.get("icon_size") or "md",
             "accent": desk.get("accent") or "",
+            "theme": desk.get("theme") or "classic",
         },
         "allow_write": CFG.get("allow_write", False),
         "allow_system_browser": bool(CFG.get("allow_system_browser", False)),
@@ -2061,6 +2068,11 @@ def api_desktop_set():
         if accent and not re.fullmatch(r"#[0-9A-Fa-f]{3,8}", accent):
             return jsonify({"error": "accent must be #hex"}), 400
         patch["accent"] = accent
+    if "theme" in body:
+        theme = str(body.get("theme") or "classic").strip().lower()
+        if theme not in THEME_IDS:
+            return jsonify({"error": f"theme must be one of {', '.join(THEME_IDS)}"}), 400
+        patch["theme"] = theme
     if not patch:
         return jsonify({"error": "no fields"}), 400
     desk = save_desktop(patch)
