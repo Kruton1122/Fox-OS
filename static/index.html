@@ -12,7 +12,12 @@
   <script>
     try {
       var t = localStorage.getItem('foxos.theme.v1');
-      if (t) document.documentElement.dataset.theme = t;
+      var ok = { modern: 1, 'liquid-glass': 1, 'frutiger-aero': 1 };
+      if (t && ok[t]) document.documentElement.dataset.theme = t;
+      else if (t && t !== 'classic') document.documentElement.removeAttribute('data-theme');
+      var colors = { classic: '#1a3a5c', modern: '#eef1f6', 'liquid-glass': '#d4e4f7', 'frutiger-aero': '#bfe4f8' };
+      var m = document.querySelector('meta[name="theme-color"]');
+      if (m) m.setAttribute('content', colors[ok[t] ? t : 'classic'] || colors.classic);
     } catch (e) { /* */ }
   </script>
   <link rel="stylesheet" href="static/style.css?v=340" />

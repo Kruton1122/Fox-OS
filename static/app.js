@@ -1,4 +1,4 @@
-/* Fox OS frontend — window manager + apps v3.3 (desktop + mobile shell) */
+/* Fox OS frontend — window manager + apps v3.4 (desktop + mobile + themes) */
 (() => {
   'use strict';
 
@@ -47,21 +47,36 @@
   /* ── Themes ──────────────────────────────────────────────────────────── */
   const THEME_KEY = 'foxos.theme.v1';
   const THEMES = [
-    { id: 'classic', name: 'Classic', blurb: 'Win 3.1 / 98 — the original Fox OS chrome.', swatch: ['#000080', '#c0c0c0', '#1084d0'] },
-    { id: 'modern', name: 'Modern', blurb: 'Clean flat shell, soft shadows, indigo accent.', swatch: ['#4a5eff', '#eef1f6', '#7c5cff'] },
-    { id: 'liquid-glass', name: 'Liquid Glass', blurb: 'Frosted translucency, blur, specular highlights.', swatch: ['#0a84ff', '#eaf4ff', '#5e5ce6'] },
-    { id: 'frutiger-aero', name: 'Frutiger Aero', blurb: 'Glossy blues, aqua gloss, 2007 nostalgia.', swatch: ['#1f8fe0', '#eaf7ff', '#7fd8ff'] },
+    { id: 'classic', name: 'Classic', blurb: 'Win 3.1 / 98 — the original Fox OS chrome.', swatch: ['#000080', '#c0c0c0', '#1084d0'], themeColor: '#1a3a5c' },
+    { id: 'modern', name: 'Modern', blurb: 'Clean flat shell, soft shadows, indigo accent.', swatch: ['#4a5eff', '#eef1f6', '#7c5cff'], themeColor: '#eef1f6' },
+    { id: 'liquid-glass', name: 'Liquid Glass', blurb: 'Frosted translucency, blur, specular highlights.', swatch: ['#0a84ff', '#eaf4ff', '#5e5ce6'], themeColor: '#d4e4f7' },
+    { id: 'frutiger-aero', name: 'Frutiger Aero', blurb: 'Glossy blues, aqua gloss, 2007 nostalgia.', swatch: ['#1f8fe0', '#eaf7ff', '#7fd8ff'], themeColor: '#bfe4f8' },
   ];
+  const THEME_IDS = THEMES.map((t) => t.id);
+  function normalizeTheme(id) {
+    const s = String(id || '').toLowerCase();
+    return THEME_IDS.includes(s) ? s : 'classic';
+  }
   function getTheme() {
-    try { return localStorage.getItem(THEME_KEY) || 'classic'; } catch { return 'classic'; }
+    try { return normalizeTheme(localStorage.getItem(THEME_KEY)); } catch { return 'classic'; }
   }
   function hasLocalTheme() {
     try { return localStorage.getItem(THEME_KEY) != null; } catch { return false; }
   }
   function applyTheme(id) {
-    document.documentElement.dataset.theme = id;
+    id = normalizeTheme(id);
+    const root = document.documentElement;
+    // Classic is the :root default — omit data-theme so style.css wins unchallenged.
+    if (id === 'classic') delete root.dataset.theme;
+    else root.dataset.theme = id;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      const spec = THEMES.find((t) => t.id === id);
+      meta.setAttribute('content', spec?.themeColor || '#1a3a5c');
+    }
   }
   function setTheme(id, opts = {}) {
+    id = normalizeTheme(id);
     applyTheme(id);
     try { localStorage.setItem(THEME_KEY, id); } catch { /* */ }
     if (!opts.skipSync) {
@@ -3353,7 +3368,7 @@
             <h3>Theme</h3>
             <div class="theme-grid" data-act="theme-grid">
               ${THEMES.map((t) => `
-                <button type="button" class="theme-card ${t.id === getTheme() ? 'current' : ''}" data-theme-id="${t.id}" title="${escapeHtml(t.blurb)}">
+                <button type="button" class="theme-card ${t.id === getTheme() ? 'current' : ''}" data-theme-id="${t.id}" title="${escapeHtml(t.blurb)}" aria-pressed="${t.id === getTheme() ? 'true' : 'false'}">
                   <span class="theme-swatch">${t.swatch.map((c) => `<i style="background:${escapeHtml(c)}"></i>`).join('')}</span>
                   <span class="theme-name">${escapeHtml(t.name)}</span>
                   <span class="theme-blurb">${escapeHtml(t.blurb)}</span>
@@ -3486,11 +3501,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ show_widgets, icon_size, accent }),
         });
-        CFG.desktop = {
-          show_widgets: res.desktop.show_widgets,
-          icon_size: res.desktop.icon_size,
-          accent: res.desktop.accent || '',
-        };
+        CFG.desktop = { ...(CFG.desktop || {}), ...(res.desktop || {}), accent: res.desktop?.accent || '' };
         applyDesktopAppearance();
       } catch (e) { alert(e.message); }
     };
@@ -3509,7 +3520,11 @@
     root.querySelectorAll('.theme-card').forEach((btn) => {
       btn.onclick = () => {
         setTheme(btn.dataset.themeId);
-        root.querySelectorAll('.theme-card').forEach((b) => b.classList.toggle('current', b === btn));
+        root.querySelectorAll('.theme-card').forEach((b) => {
+          const on = b === btn;
+          b.classList.toggle('current', on);
+          b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
       };
     });
     $('[data-act="layout-force"]', root).onchange = (e) => setLayoutForce(e.target.value);

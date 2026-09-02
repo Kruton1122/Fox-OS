@@ -215,8 +215,8 @@ Fox OS ships four selectable looks, switched live from **Settings → Theme** �
 | **Liquid Glass** | Frosted translucency, `backdrop-filter` blur on windows/taskbar/Start menu, specular titlebar highlight |
 | **Frutiger Aero** | Glossy blue/aqua gradients, skeuomorphic titlebar sheen — CSS only, no image assets |
 
-- Implemented as CSS custom properties switched via `<html data-theme="…">`; `static/style.css` defines the Classic baseline in `:root`, `static/themes.css` layers the other three (loaded after, so it wins the cascade) — nothing else in the codebase needs to know which theme is active.
-- Choice is stored in `localStorage` (`foxos.theme.v1`) and applied before first paint (no flash of the wrong theme), and best-effort synced to the `theme` field in the `data/desktop.json` appearance overlay via `POST /api/desktop` — so a second browser on the same server picks up your last choice, while `localStorage` stays the fast path for the current browser.
+- Implemented as CSS custom properties switched via `<html data-theme="…">`; `static/style.css` defines the Classic baseline in `:root` (Classic = no `data-theme` attribute), `static/themes.css` layers the other three (loaded after, so it wins the cascade) — nothing else in the codebase needs to know which theme is active.
+- Choice is stored in `localStorage` (`foxos.theme.v1`) and applied before first paint (no flash of the wrong theme), and best-effort synced to the `theme` field in the `data/desktop.json` appearance overlay via `POST /api/desktop` — so a second browser on the same server picks up your last choice, while `localStorage` stays the fast path for the current browser. Invalid stored values fall back to Classic.
 - Liquid Glass degrades to a solid near-opaque panel (via `@supports`) on browsers without `backdrop-filter`.
 - Wallpaper is independent of theme — themes restyle chrome (windows, taskbar, Start menu, dock), not the desktop background.
 

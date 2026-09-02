@@ -21,7 +21,9 @@ Themes: four selectable looks for the whole shell, switchable live from Settings
 ### Changed
 
 - Version bumped to **3.4.0**; static asset cache busters (`?v=340`).
-- A handful of previously-hardcoded chrome colors (context-menu hover, task tab counter, active titlebar gradient) now reference existing CSS variables (`--sel`, `--title`/`--title2`) instead of literal hex — pixel-identical for Classic, themeable for everything else.
+- A handful of previously-hardcoded chrome colors (context-menu hover, task tab counter, active titlebar gradient, tray meters, Start search, Settings theme cards) now reference CSS variables (`--sel`, `--title`/`--title2`, `--text`, `--panel-*`) instead of literal hex — Classic values stay in `:root` so the default look is unchanged.
+- Titlebars gain `--title-fg` / `--title-fg-inactive` so Modern / Liquid Glass / Frutiger Aero inactive windows keep readable contrast (white-on-light was a miss); gloss `::after` overlays stack *behind* title text and window controls.
+- Classic is applied by *omitting* `<html data-theme>` (the `:root` default). The other three set `data-theme`; invalid `localStorage` values fall back to Classic.
 - No backend/API changes beyond the new optional `theme` field on `/api/desktop` (GET/POST) and `/api/config`; wallpaper, mobile detection, trash, and the PTY terminal are untouched.
 
 ## [3.3.0] — 2026-09-01
@@ -137,7 +139,8 @@ Initial public release: portable Flask + static web desktop for headless Linux.
 - `config.example.json` template; machine-local `config.json` gitignored.
 - systemd unit example and reverse-proxy notes.
 
-[3.3.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.2.0...HEAD
+[3.4.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.1...v3.2.0
 [3.1.1]: https://github.com/Kruton1122/Fox-OS/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/Kruton1122/Fox-OS/compare/v3.0.1...v3.1.0

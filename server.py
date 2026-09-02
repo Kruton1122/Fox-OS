@@ -195,6 +195,8 @@ def load_desktop() -> dict:
     for k, v in data.items():
         if k in base or k in ("wallpaper", "wallpaper_source", "show_widgets", "icon_size", "accent", "theme"):
             out[k] = v
+    if out.get("theme") not in THEME_IDS:
+        out["theme"] = "classic"
     return out
 
 
